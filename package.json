@@ -1,0 +1,22 @@
+{
+    "name": "gia-su-tin-hoc",
+    "version": "1.0.0",
+    "description": "Một ứng dụng chatbot gia sư giúp bạn giải đáp mọi thắc mắc về tin học căn bản.",
+    "main": "script.js",
+    "type": "module",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1",
+        "start:js": "node --watch server.js",
+        "start:py": "python -X utf8 server.py",
+        "dev": "concurrently \"npm run start:js\" \"npm run start:py\""
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "dependencies": {
+        "axios": "^1.13.1",
+        "concurrently": "^9.2.1",
+        "cors": "^2.8.5",
+        "express": "^5.1.0"
+    }
+}
