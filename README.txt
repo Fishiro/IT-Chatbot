@@ -1,4 +1,8 @@
-Chạy setup lần đầu (1 lần): npm install
+Đầu tiên chạy setup cho lần đầu (1 lần duy nhất): npm install
+
+CÀI THƯ VIỆN PHỤ THUỘC
+python -m pip install -r requirements.txt
+npm install
 
 CHẠY SERVER (YÊU CẦU ĐÃ SETUP XONG)
 1. Kích hoạt env Python: env\Scripts\activate
