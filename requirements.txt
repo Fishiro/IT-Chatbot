@@ -1,4 +1,13 @@
-Flask==3.1.2
-flask_cors==6.0.1
-protobuf==6.33.0
-python-dotenv==1.2.1
+Flask
+flask_cors
+protobuf
+python-dotenv
+google-generativeai
+langchain
+langchain-google-genai
+langchain-community
+faiss-cpu
+pypdf       
+python-docx    
+openpyxl
+python-pptx  

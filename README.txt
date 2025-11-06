@@ -1,3 +1,5 @@
+Yêu cầu Python 3.11.0
+
 Tạo file .env đưa key API của Gemini vào dự án trước khi chạy
 GEMINI_API_KEY=
                 ^^^^^^^^^^
@@ -9,7 +11,7 @@ python -m pip install -r requirements.txt
 npm install
 
 CHẠY SERVER (YÊU CẦU ĐÃ SETUP XONG)
-1. Kích hoạt env Python: env\Scripts\activate
+1. Kích hoạt env Python: python-env\Scripts\Activate.ps1
 2. Khởi động server: npm run dev
 
 DÙNG NGROK MỞ PUBLIC LINK TEST
