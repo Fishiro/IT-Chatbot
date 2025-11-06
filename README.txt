@@ -1,3 +1,7 @@
+Tạo file .env đưa key API của Gemini vào dự án trước khi chạy
+GEMINI_API_KEY=
+                ^^^^^^^^^^
+
 Đầu tiên chạy setup cho lần đầu (1 lần duy nhất): npm install
 
 CÀI THƯ VIỆN PHỤ THUỘC
