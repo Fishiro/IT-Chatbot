@@ -3,7 +3,7 @@ const userInput = document.getElementById("user-input");
 const chatMessages = document.getElementById("chat-messages");
 
 // URL trỏ đến backend server.js
-const API_URL = "/api/chat";
+const API_URL = "https://it-chatbot-lyg3.onrender.com/api/chat";
 const sessionID = `session-${Date.now()}-${Math.random()
     .toString(36)
     .substring(2, 9)}`;
