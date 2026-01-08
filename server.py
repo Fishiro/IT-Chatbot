@@ -124,5 +124,11 @@ if __name__ == "__main__":
     print(f"║{line2_2.ljust(width)}║")
     print(f"╚{'═' * width}╝")
 
-    # CHẠY MÁY CHỦ PYTHON
-    app.run(host="0.0.0.0", port=flask_port, debug=True)
+    # Lấy PORT từ biến môi trường của server, nếu không có thì dùng 5000
+    port = int(os.environ.get("PORT", 5000))
+
+    # In ra log để debug trên console của Render nếu cần
+    print(f"Starting app on port {port}")
+
+    # Tắt debug=True khi lên mạng để bảo mật và ổn định hơn
+    app.run(host="0.0.0.0", port=port, debug=False)
