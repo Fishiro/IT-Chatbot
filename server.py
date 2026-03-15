@@ -5,6 +5,10 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 import socket
 
+# --- Import thêm thư viện cho Vector DB ---
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_community.vectorstores import FAISS
+
 load_dotenv()
 
 app = Flask(__name__)
@@ -17,22 +21,28 @@ if not GEMINI_API_KEY:
 
 genai.configure(api_key=GEMINI_API_KEY)
 
+# --- Nạp Vector DB (Bộ não kiến thức) ---
+print("Đang nạp bộ nhớ Vector DB (faiss_index)...")
+embeddings = GoogleGenerativeAIEmbeddings(
+    model="models/gemini-embedding-001", 
+    google_api_key=GEMINI_API_KEY
+)
+
+try:
+    # allow_dangerous_deserialization=True là bắt buộc ở các phiên bản Langchain mới khi load file local
+    vectorstore = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 3}) # Lấy 3 đoạn liên quan nhất
+    print("-> Đã nạp thành công bộ não AI!")
+except Exception as e:
+    print(f"-> Không tìm thấy hoặc lỗi nạp Vector DB: {e}")
+    retriever = None
+
+# --- Prompt Hệ thống mới ---
 system_instruction = """Bạn là một "Gia sư số Tin học căn bản theo Thông tư số 11/2018/TT-BLĐTBXH".
 Nhiệm vụ của bạn là giải thích các khái niệm tin học cơ bản, tập trung vào tính chính xác, hướng dẫn thực hành từng bước, và dễ hiểu.
 
-Nội dung bao gồm 6 chương chính:
-            1. Hiểu biết về công nghệ thông tin cơ bản
-            2. Sử dụng máy tính cơ bản (Windows 10/11)
-            3. Xử lý văn bản cơ bản (Microsoft Word 2016/2019/365)
-            4. Sử dụng bảng tính cơ bản (Microsoft Excel 2016/2019/365)
-            5. Sử dụng trình chiếu cơ bản (Microsoft PowerPoint 2016/2019/365)
-            6. Sử dụng Internet cơ bản.
-
-Hỏi đáp kiến thức lý thuyết súc tích. Hướng dẫn thao tác thực hành từng bước (step-by-step tutorial) cho các phần mềm Microsoft Office. Giải thích bài tập và đề xuất bài tập tương tự. Đánh giá và phản hồi bài làm ở mức độ cơ bản một cách đơn giản, dễ hiểu cho người mới bắt đầu. Nhiệm vụ của bạn là trả lời ngắn gọn trừ trường hợp người dùng yêu cầu trả lời dài hơn.
-Hãy kiên nhẫn và dùng ví dụ minh họa khi cần thiết.
-
-Nếu người dùng hỏi nội dung không liên quan đến chủ đề và ngữ cảnh hiện tại, 
-bạn có quyền không trả lời câu hỏi đó mà hãy trả lời "Tôi không được huấn luyện để trả lời nội dung này."
+Hãy ưu tiên sử dụng thông tin từ phần [Tài liệu tham khảo] được cung cấp trong câu hỏi để trả lời. Nếu tài liệu tham khảo không có thông tin, hãy dùng kiến thức nền của bạn.
+Hỏi đáp kiến thức lý thuyết súc tích. Hướng dẫn thao tác thực hành từng bước.
 """
 
 config = genai.types.GenerationConfig(
@@ -45,9 +55,7 @@ model = genai.GenerativeModel(
     generation_config=config
 )
 
-# --- Bộ nhớ Session (Python) ---
 active_sessions = {}
-
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
@@ -56,40 +64,42 @@ def chat():
         user_message = data.get("message")
         session_id = data.get("sessionID")
 
-        if not user_message:
-            return jsonify({"error": "Thiếu 'message' trong body."}), 400
-
-        if not session_id:
-            return jsonify({"error": "Thiếu 'sessionID' trong body."}), 400
+        if not user_message or not session_id:
+            return jsonify({"error": "Thiếu dữ liệu."}), 400
 
         if session_id in active_sessions:
-            chat = active_sessions[session_id]
+            chat_session = active_sessions[session_id]
         else:
-            print(f"Tạo phiên chat mới: {session_id}")
-            chat = model.start_chat(history=[])
-            active_sessions[session_id] = chat
+            chat_session = model.start_chat(history=[])
+            active_sessions[session_id] = chat_session
 
-        response = chat.send_message(user_message)
-        bot_message = response.text
+        # --- Tích hợp tài liệu vào câu hỏi ---
+        if retriever:
+            # Lục tìm tài liệu
+            docs = retriever.invoke(user_message)
+            context = "\n\n".join([f"- Nội dung: {doc.page_content} \n(Nguồn: {doc.metadata.get('source', 'Không rõ')})" for doc in docs])
+            
+            # Gắn tài liệu vào sau lưng câu hỏi của người dùng một cách bí mật
+            augmented_message = f"[Tài liệu tham khảo]:\n{context}\n\n[Câu hỏi của tôi]: {user_message}"
+        else:
+            augmented_message = user_message
 
-        return jsonify({"reply": bot_message})
+        response = chat_session.send_message(augmented_message)
+        return jsonify({"reply": response.text})
 
     except Exception as e:
-        print(f"Lỗi phía máy chủ Python: {e}")
-        return jsonify({"error": "Có lỗi xảy ra phía máy chủ Python"}), 500
+        print(f"Lỗi phía máy chủ: {e}")
+        return jsonify({"error": "Có lỗi xảy ra phía máy chủ"}), 500
 
 
 def get_local_ip():
-    """Lấy địa chỉ IP nội bộ của máy."""
     s = None
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # Kết nối đến một địa chỉ IP công cộng (không thực sự gửi dữ liệu)
-        # để buộc HĐH chọn đúng card mạng
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
     except Exception:
-        ip = "127.0.0.1"  # Trả về localhost nếu không tìm thấy
+        ip = "127.0.0.1" 
     finally:
         if s:
             s.close()
@@ -98,37 +108,27 @@ def get_local_ip():
 
 if __name__ == "__main__":
     local_ip = get_local_ip()
-    node_port = 3000   # Cổng Frontend (Node.js) người dùng truy cập
-    flask_port = 5000  # Cổng Backend (Python) này
+    node_port = 3000   
+    flask_port = 5000  
 
-    # Chiều rộng của nội dung bên trong bảng
     width = 60
-
-    # Định nghĩa các dòng nội dung
     title1 = "  ► Máy chủ Python (Backend) đã sẵn sàng."
     line1_1 = f"     - Đang chạy tại: http://localhost:{flask_port}"
     line1_2 = f"     - Chấp nhận kết nối từ: 0.0.0.0:{flask_port}"
 
-    title2 = "  ► ĐƯỜNG DẪN TRUY CẬP CHATBOT (cho mạng LAN):"
+    title2 = "  ► ĐƯỜNG DẪN TRUY CẬP CHATBOT:"
     line2_1 = f"     Mở trên máy này: http://localhost:{node_port}"
-    line2_2 = f"     Mở trên thiết bị khác: http://{local_ip}:{node_port}"
+    line2_2 = f"     Mở thiết bị khác: http://{local_ip}:{node_port}"
 
-    # In bảng
     print(f"╔{'═' * width}╗")
     print(f"║{title1.ljust(width)}║")
     print(f"║{line1_1.ljust(width)}║")
     print(f"║{line1_2.ljust(width)}║")
-    print(f"╟{'─' * width}╢")  # Dấu phân cách
+    print(f"╟{'─' * width}╢")  
     print(f"║{title2.ljust(width)}║")
     print(f"║{line2_1.ljust(width)}║")
     print(f"║{line2_2.ljust(width)}║")
     print(f"╚{'═' * width}╝")
 
-    # Lấy PORT từ biến môi trường của server, nếu không có thì dùng 5000
     port = int(os.environ.get("PORT", 5000))
-
-    # In ra log để debug trên console của Render nếu cần
-    print(f"Starting app on port {port}")
-
-    # Tắt debug=True khi lên mạng để bảo mật và ổn định hơn
     app.run(host="0.0.0.0", port=port, debug=False)
