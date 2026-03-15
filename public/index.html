@@ -1,34 +1,413 @@
-<!DOCTYPE html>
-<html lang="vi">
+<!doctype html>
+<html lang="vi" class="light">
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Gia Sư Số Tin Học Căn Bản</title>
-        <link rel="stylesheet" href="style.css" />
+        <link rel="icon" type="image/x-icon" href="/resource/icon.ico" />
+
+        <!-- 1. ICON THANH TAB -->
+        <link rel="icon" type="image/png" href="resource/icon.png" />
+        <link rel="apple-touch-icon" href="resource/icon@2x.png" />
+
         <script src="https://cdn.tailwindcss.com"></script>
+
+        <!-- Cấu hình Tailwind -->
+        <script>
+            tailwind.config = {
+                darkMode: "class",
+                theme: {
+                    extend: {},
+                },
+            };
+        </script>
+
+        <link rel="stylesheet" href="style.css" />
+
+        <style>
+            /* Khóa quét chọn */
+            .ui-locked {
+                -webkit-user-select: none;
+                -moz-user-select: none;
+                -ms-user-select: none;
+                user-select: none;
+            }
+
+            /* Jelly Logic */
+            .jelly-squeeze {
+                transform: scale(0.97, 0.98) translateY(1px);
+                filter: saturate(1.1) brightness(1.02);
+                transition: transform 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+            }
+
+            @keyframes jelly-spring {
+                0% {
+                    transform: scale(0.97, 0.98);
+                }
+                40% {
+                    transform: scale(1.02, 0.99);
+                }
+                70% {
+                    transform: scale(0.99, 1);
+                }
+                100% {
+                    transform: scale(1, 1);
+                }
+            }
+
+            .jelly-release {
+                animation: jelly-spring 0.8s cubic-bezier(0.25, 1, 0.5, 1);
+                will-change: transform;
+            }
+
+            /* Spring CSS Input */
+            .panel-spring-wrapper {
+                transition: transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+                will-change: transform;
+            }
+            .panel-spring-wrapper:active {
+                transform: scale(0.99) translateY(2px);
+                transition: transform 0.1s cubic-bezier(0.2, 0, 0.2, 1);
+            }
+            .panel-spring-wrapper:focus-within {
+                transform: scale(1.01) translateY(-1px);
+            }
+            .panel-spring-wrapper:focus-within:active:not(
+                    :has(#send-btn:active)
+                ) {
+                transform: scale(0.995) translateY(1px);
+            }
+            .panel-spring-wrapper:has(#send-btn:active):active {
+                transform: scale(1.01) translateY(-1px);
+            }
+
+            #chat-input-container {
+                transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+            }
+
+            /* SỬA: Loại bỏ viền ở thanh input, dùng Box-shadow hiện đại */
+            .panel-spring-wrapper:has(#send-btn:active) #chat-input-container {
+                transform: translateX(-4px) scale(0.995);
+                background-color: rgba(255, 255, 255, 0.95);
+                box-shadow: 0 15px 40px rgba(56, 189, 248, 0.2);
+                border: none !important;
+                transition: all 0.1s cubic-bezier(0.2, 0, 0.2, 1);
+            }
+
+            .dark
+                .panel-spring-wrapper:has(#send-btn:active)
+                #chat-input-container {
+                background-color: rgba(30, 41, 59, 0.95);
+                box-shadow: 0 15px 40px rgba(0, 0, 0, 0.4);
+                border: none !important;
+            }
+
+            .btn-send-spring {
+                transition: all 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+            }
+            .btn-send-spring:active {
+                transform: scale(0.75) rotate(-12deg) !important;
+                box-shadow: 0 0 25px rgba(56, 189, 248, 0.6);
+                transition: all 0.1s cubic-bezier(0.2, 0, 0.2, 1);
+            }
+
+            /* --- CUSTOM CSS: LOẠI BỎ VIỀN, DÙNG BÓNG ĐỔ (SHADOW) --- */
+
+            /* Sidebar */
+            .sidebar-glass {
+                background: rgba(255, 255, 255, 0.5);
+                backdrop-filter: blur(20px);
+                -webkit-backdrop-filter: blur(20px);
+                border: none !important; /* Xóa viền đen/trắng */
+                box-shadow: 0 10px 40px rgba(0, 0, 0, 0.04); /* Bóng nhẹ */
+                transition: all 0.7s cubic-bezier(0.4, 0, 0.2, 1);
+            }
+
+            .dark .sidebar-glass {
+                background: rgba(15, 23, 42, 0.65);
+                box-shadow: 0 15px 50px rgba(0, 0, 0, 0.4); /* Bóng sâu hơn trong Dark Mode */
+            }
+
+            /* Ghi đè toàn bộ Bong bóng chat (Xóa border, thêm màu mới từ ảnh) */
+            .message {
+                border: none !important; /* Xóa mọi loại viền */
+                transition:
+                    background-color 0.7s ease,
+                    color 0.7s ease,
+                    box-shadow 0.7s ease;
+            }
+
+            /* Bot (Sáng) */
+            .message.bot {
+                background-color: #ffffff !important;
+                color: #1b1b1e !important;
+                box-shadow: 0 8px 24px rgba(149, 157, 165, 0.08) !important; /* Bóng nhẹ nâng khối */
+            }
+
+            /* User (Sáng) - Màu Vàng Cam tích cực từ hình ảnh */
+            .message.user {
+                background-color: #ffad1f !important;
+                color: #1b1b1e !important;
+                box-shadow: 0 8px 24px rgba(255, 173, 31, 0.25) !important;
+            }
+
+            /* Bot (Tối) */
+            .dark .message.bot {
+                background-color: #1e293b !important;
+                color: #f8fafc !important;
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3) !important;
+            }
+
+            /* User (Tối) */
+            .dark .message.user {
+                background-color: #38bdf8 !important;
+                color: #0f172a !important;
+                box-shadow: 0 8px 24px rgba(56, 189, 248, 0.15) !important;
+            }
+
+            /* Fix chữ P cho bot để tránh margin dư */
+            .message.bot p {
+                margin-bottom: 0.5rem;
+            }
+            .message.bot p:last-child {
+                margin-bottom: 0;
+            }
+        </style>
     </head>
-    <body>
-        <div class="chat-container">
-            <div class="chat-header">
-                <h2>Gia sư số Tin học căn bản</h2>
+    <!-- SỬA NỀN TRÌNH DUYỆT: Dùng màu nền base để chuyển đổi thay vì overlay giật cục -->
+    <body
+        class="bg-[#F4F9FD] dark:bg-[#0B1121] h-[100dvh] flex overflow-hidden text-[#1B1B1E] dark:text-[#F8FAFC] font-sans transition-colors duration-[800ms] ease-in-out relative"
+    >
+        <!-- ĐÃ XÓA LỚP CINEMATIC DARK LAYER ĐỂ KHÔNG BỊ FLASH CHÓI -->
+
+        <!-- NÚT TOGGLE SÁNG/TỐI -->
+        <button
+            id="theme-toggle"
+            class="absolute top-6 right-6 z-50 w-12 h-12 rounded-full bg-white/80 dark:bg-[#1E293B]/90 backdrop-blur-xl border-none shadow-[0_8px_20px_rgba(0,0,0,0.06)] dark:shadow-[0_8px_20px_rgba(0,0,0,0.4)] flex items-center justify-center text-gray-700 dark:text-yellow-400 hover:scale-110 active:scale-90 transition-all duration-500 ui-locked group"
+        >
+            <div class="relative w-6 h-6 flex items-center justify-center">
+                <svg
+                    id="icon-sun"
+                    class="absolute inset-0 w-6 h-6 transition-all duration-700 ease-[cubic-bezier(0.34,1.56,0.64,1)] rotate-0 scale-100 opacity-100 dark:-rotate-90 dark:scale-0 dark:opacity-0"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    stroke-width="2"
+                >
+                    <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"
+                    />
+                </svg>
+                <svg
+                    id="icon-moon"
+                    class="absolute inset-0 w-6 h-6 transition-all duration-700 ease-[cubic-bezier(0.34,1.56,0.64,1)] rotate-90 scale-0 opacity-0 dark:rotate-0 dark:scale-100 dark:opacity-100"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    stroke-width="2"
+                >
+                    <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"
+                    />
+                </svg>
             </div>
-            <div class="chat-messages" id="chat-messages">
-                <div class="message bot">
-                    Xin chào! Tôi có thể giúp gì cho bạn về tin học hôm nay?
+        </button>
+
+        <!-- SIDEBAR LƠ LỬNG -->
+        <!-- ĐÃ XÓA hover:-translate-y-1 ở đây để sidebar không bị nhích lên -->
+        <div
+            class="hidden md:flex flex-col shrink-0 m-6 w-64 rounded-[32px] overflow-hidden sidebar-glass jelly-trigger relative z-10 cursor-pointer ui-locked transition-all"
+        >
+            <aside class="flex-1 flex flex-col w-full h-full relative">
+                <!-- Xóa border-b -->
+                <div class="p-6 transition-colors duration-700 relative">
+                    <!-- Divider ảo bằng màu nền nhẹ thay vì kẻ viền -->
+                    <div
+                        class="absolute bottom-0 left-6 right-6 h-[1px] bg-gray-200 dark:bg-gray-700/50 rounded-full"
+                    ></div>
+                    <h1
+                        class="font-bold text-lg text-[#1B1B1E] dark:text-white transition-colors duration-700 flex items-center gap-3"
+                    >
+                        <img
+                            src="resource/icon.png"
+                            srcset="
+                                resource/icon@2x.png 2x,
+                                resource/icon@4x.png 4x
+                            "
+                            alt="Logo"
+                            class="w-9 h-9 object-contain"
+                            draggable="false"
+                            onerror="
+                                this.src =
+                                    'https://api.iconify.design/fluent-emoji:owl.svg'
+                            "
+                        />
+                        <span
+                            class="tracking-tight font-bold opacity-90 text-base"
+                            >Gia Sư Tin Học</span
+                        >
+                    </h1>
+                </div>
+                <div class="flex-1 overflow-y-auto p-4 space-y-3 relative z-10">
+                    <!-- ĐÃ THÊM: hover:scale-105 để nút nảy nở to ra nhẹ nhàng -->
+                    <button
+                        id="new-chat-btn"
+                        class="w-full text-left px-5 py-3 rounded-full bg-[#394E5A] dark:bg-[#1E293B] text-[#38BDF8] text-sm font-medium hover:bg-[#475F6D] dark:hover:bg-[#2D3B4E] transition-all hover:scale-105 active:scale-95 shadow-md border-none"
+                    >
+                        + Đoạn chat mới
+                    </button>
+                    <div
+                        class="pt-8 pb-2 px-2 text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-[0.25em] transition-colors duration-700"
+                    >
+                        Gần đây
+                    </div>
+                    <div id="history-list" class="space-y-1 flex flex-col">
+                        <!-- History List -->
+                    </div>
+                </div>
+                <!-- Xóa border-t -->
+                <div
+                    class="p-5 relative text-[10px] text-gray-400 dark:text-gray-500 text-center font-medium opacity-70 uppercase tracking-widest transition-colors duration-700"
+                >
+                    <div
+                        class="absolute top-0 left-8 right-8 h-[1px] bg-gray-200 dark:bg-gray-700/50 rounded-full"
+                    ></div>
+                    QUI DESIGN
+                </div>
+            </aside>
+        </div>
+
+        <!-- KHUNG CHAT CHÍNH -->
+        <div class="flex-1 flex flex-col h-full bg-transparent relative z-10">
+            <header
+                class="md:hidden bg-white/60 dark:bg-[#0F172A]/80 backdrop-blur-2xl text-[#1B1B1E] dark:text-white p-4 text-center font-medium text-lg z-10 shrink-0 flex justify-between items-center border-none shadow-sm ui-locked transition-colors duration-700"
+            >
+                <span class="flex items-center gap-2">
+                    <img
+                        src="resource/icon.png"
+                        alt="Logo"
+                        class="w-6 h-6 object-contain"
+                        draggable="false"
+                    />
+                    Gia sư số
+                </span>
+            </header>
+
+            <main
+                class="flex-1 overflow-y-auto p-4 md:p-14 pb-44 md:pb-52 space-y-12 flex flex-col relative z-0"
+                id="chat-messages"
+            >
+                <div class="message bot new-message">
+                    Xin chào Quí, hôm nay bạn muốn tìm hiểu thêm về kiến thức
+                    tin học nào? Tôi luôn sẵn sàng hỗ trợ!
+                </div>
+            </main>
+
+            <!-- TRẠNG THÁI LOADING -->
+            <div
+                class="flex justify-center items-center absolute bottom-[150px] w-full pointer-events-none z-10 ui-locked"
+            >
+                <div
+                    class="hidden bg-white/80 dark:bg-[#1E293B]/80 backdrop-blur-3xl px-6 py-2.5 rounded-full shadow-[0_8px_20px_rgba(0,0,0,0.05)] dark:shadow-[0_8px_20px_rgba(0,0,0,0.3)] border-none flex items-center gap-4 pointer-events-auto transition-colors duration-700"
+                    id="loading"
+                >
+                    <div class="flex gap-2">
+                        <div
+                            class="w-1.5 h-1.5 bg-[#38BDF8] rounded-full animate-bounce"
+                        ></div>
+                        <div
+                            class="w-1.5 h-1.5 bg-[#38BDF8] rounded-full animate-bounce [animation-delay:-0.15s]"
+                        ></div>
+                    </div>
+                    <span
+                        class="font-medium text-[10px] uppercase tracking-[0.2em] text-gray-500 dark:text-gray-300"
+                        >Đang xử lý dữ liệu</span
+                    >
                 </div>
             </div>
-            <div class="chat-input-area">
-                <input
-                    type="text"
-                    id="user-input"
-                    placeholder="Hỏi tôi bất cứ điều gì..."
-                />
-                <button id="send-btn">Gửi</button>
-            </div>
-            <div class="loading" id="loading" style="display: none">
-                Đang suy nghĩ...
-            </div>
+
+            <!-- PANEL NHẬP LIỆU -->
+            <footer
+                class="absolute bottom-0 w-full p-10 md:p-14 pb-14 pointer-events-none z-20"
+            >
+                <div
+                    class="pointer-events-auto max-w-3xl mx-auto panel-spring-wrapper ui-locked"
+                >
+                    <!-- Bỏ toàn bộ Border, thay bằng Bóng (Shadow) -->
+                    <div
+                        id="chat-input-container"
+                        class="flex items-center gap-4 bg-white/80 dark:bg-[#1E293B]/80 backdrop-blur-[40px] -webkit-backdrop-blur-[40px] p-4 pl-8 border-none shadow-[0_15px_40px_rgba(0,0,0,0.05)] dark:shadow-[0_15px_40px_rgba(0,0,0,0.3)] rounded-[32px] focus-within:bg-white dark:focus-within:bg-[#1E293B] focus-within:shadow-[0_20px_50px_rgba(56,189,248,0.1)] relative overflow-hidden cursor-pointer transition-all duration-700"
+                    >
+                        <input
+                            type="text"
+                            id="user-input"
+                            class="flex-1 bg-transparent py-2 focus:outline-none text-[#1B1B1E] dark:text-white font-light placeholder-gray-400 dark:placeholder-gray-400 text-lg relative z-10 select-text transition-colors duration-700"
+                            placeholder="Nhập câu hỏi của bạn..."
+                        />
+
+                        <button
+                            id="send-btn"
+                            class="bg-[#38BDF8] shadow-md hover:scale-105 text-[#1B1B1E] w-12 h-12 flex items-center justify-center relative z-10 border-none rounded-[18px] btn-send-spring"
+                        >
+                            <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                viewBox="0 0 24 24"
+                                fill="currentColor"
+                                class="w-6 h-6 ml-1 opacity-90"
+                            >
+                                <path
+                                    d="M3.478 2.404a.75.75 0 0 0-.926.941l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.404Z"
+                                />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </footer>
         </div>
+
+        <script>
+            document.querySelectorAll(".jelly-trigger").forEach((el) => {
+                el.addEventListener("mousedown", () => {
+                    el.classList.remove("jelly-release");
+                    el.classList.add("jelly-squeeze");
+                });
+
+                const release = () => {
+                    if (el.classList.contains("jelly-squeeze")) {
+                        el.classList.remove("jelly-squeeze");
+                        void el.offsetWidth;
+                        el.classList.add("jelly-release");
+                    }
+                };
+
+                el.addEventListener("mouseup", release);
+                el.addEventListener("mouseleave", release);
+                el.addEventListener("animationend", (e) => {
+                    if (e.animationName === "jelly-spring") {
+                        el.classList.remove("jelly-release");
+                    }
+                });
+            });
+
+            // LOGIC CHUYỂN ĐỔI SÁNG TỐI
+            const themeToggleBtn = document.getElementById("theme-toggle");
+            const htmlEl = document.documentElement;
+
+            if (localStorage.getItem("theme") === "dark") {
+                htmlEl.classList.add("dark");
+            }
+
+            themeToggleBtn.addEventListener("click", () => {
+                htmlEl.classList.toggle("dark");
+                const isDark = htmlEl.classList.contains("dark");
+                localStorage.setItem("theme", isDark ? "dark" : "light");
+            });
+        </script>
+
         <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
         <script src="script.js"></script>
     </body>

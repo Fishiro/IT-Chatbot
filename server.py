@@ -50,7 +50,7 @@ config = genai.types.GenerationConfig(
 )
 
 model = genai.GenerativeModel(
-    model_name="gemini-2.5-flash-lite",
+    model_name="gemini-3.1-flash-lite-preview",
     system_instruction=system_instruction,
     generation_config=config
 )
@@ -88,8 +88,10 @@ def chat():
         return jsonify({"reply": response.text})
 
     except Exception as e:
-        print(f"Lỗi phía máy chủ: {e}")
-        return jsonify({"error": "Có lỗi xảy ra phía máy chủ"}), 500
+        import traceback
+        print("--- LỖI CHI TIẾT TỪ SERVER ---")
+        traceback.print_exc() # Dòng này sẽ in ra chính xác thư viện nào bị thiếu hoặc lỗi
+        return jsonify({"error": str(e)}), 500
 
 
 def get_local_ip():
