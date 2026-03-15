@@ -50,7 +50,7 @@ config = genai.types.GenerationConfig(
 )
 
 model = genai.GenerativeModel(
-    model_name="gemini-3.1-flash-lite-preview",
+    model_name="gemini-2.5-flash-lite",
     system_instruction=system_instruction,
     generation_config=config
 )
