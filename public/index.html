@@ -128,6 +128,62 @@
                 box-shadow: 0 15px 50px rgba(0, 0, 0, 0.4); /* Bóng sâu hơn trong Dark Mode */
             }
 
+            /* TÍNH NĂNG MỚI: Hiệu ứng nhấn lò xo tinh tế cho Sidebar */
+            .sidebar-spring {
+                transition:
+                    transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1),
+                    box-shadow 0.6s ease;
+                will-change: transform;
+            }
+            .sidebar-spring:active {
+                transform: scale(0.985) translateY(2px);
+                box-shadow: 0 5px 15px rgba(0, 0, 0, 0.02) !important;
+                transition:
+                    transform 0.1s cubic-bezier(0.2, 0, 0.2, 1),
+                    box-shadow 0.1s ease;
+            }
+            .dark .sidebar-spring:active {
+                box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2) !important;
+            }
+
+            /* TÍNH NĂNG MỚI: Nút Đoạn chat mới (Solid Modern + Smooth Animation) */
+            .btn-modern-glass {
+                background: #394e5a; /* Màu đặc nguyên bản của bạn cho Light Mode */
+                color: #38bdf8;
+                border: none !important;
+                transition:
+                    all 0.6s cubic-bezier(0.34, 1.56, 0.64, 1),
+                    background-color 0.3s ease;
+                will-change: transform, box-shadow;
+                box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08); /* Bóng cơ bản nhẹ nhàng */
+            }
+            .dark .btn-modern-glass {
+                background: #1e293b; /* Màu đặc cho Dark Mode */
+                box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+            }
+            .btn-modern-glass:hover {
+                transform: scale(1.02) translateY(-1px);
+                /* Bóng Glow tỏa sáng màu xanh nhạt cực kỳ hiện đại */
+                box-shadow: 0 12px 25px -5px rgba(56, 189, 248, 0.35);
+                background: #475f6d; /* Sáng hơn một chút khi di chuột */
+            }
+            .dark .btn-modern-glass:hover {
+                background: #2d3b4e;
+                box-shadow: 0 12px 25px -5px rgba(56, 189, 248, 0.25);
+            }
+            .btn-modern-glass:active {
+                transform: scale(0.97) translateY(1px);
+                box-shadow: 0 2px 10px rgba(56, 189, 248, 0.15);
+                transition: all 0.1s cubic-bezier(0.2, 0, 0.2, 1);
+            }
+            /* Hiệu ứng xoay icon mượt mà */
+            .btn-modern-glass svg {
+                transition: transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+            }
+            .btn-modern-glass:hover svg {
+                transform: rotate(90deg) scale(1.1);
+            }
+
             /* Ghi đè toàn bộ Bong bóng chat (Xóa border, thêm màu mới từ ảnh) */
             .message {
                 border: none !important; /* Xóa mọi loại viền */
@@ -172,14 +228,133 @@
             .message.bot p:last-child {
                 margin-bottom: 0;
             }
+
+            /* =========================================
+               1. LỚP PHỦ GRADIENT KÍNH (BOTTOM GLASS)
+               ========================================= */
+            .bottom-glass-gradient {
+                position: absolute;
+                bottom: 0;
+                left: 0;
+                width: 100%;
+                height: 180px; /* Độ cao vùng mờ */
+                /* Màu nền tương thích với bg-[#F4F9FD] ban đầu */
+                background: linear-gradient(
+                    to top,
+                    rgba(244, 249, 253, 0.95) 10%,
+                    rgba(244, 249, 253, 0) 100%
+                );
+                backdrop-filter: blur(12px);
+                -webkit-backdrop-filter: blur(12px);
+                -webkit-mask-image: linear-gradient(
+                    to top,
+                    black 30%,
+                    transparent 100%
+                );
+                mask-image: linear-gradient(
+                    to top,
+                    black 30%,
+                    transparent 100%
+                );
+                pointer-events: none;
+                z-index: 15; /* Nằm dưới input (z-20) nhưng trên chat (z-10) */
+                transition: background 0.8s ease-in-out;
+            }
+
+            /* Kính ở Dark Mode tương thích với bg-[#0B1121] */
+            .dark .bottom-glass-gradient {
+                background: linear-gradient(
+                    to top,
+                    rgba(11, 17, 33, 0.95) 10%,
+                    rgba(11, 17, 33, 0) 100%
+                );
+            }
+
+            /* =========================================
+               2. ANIMATION TRẠNG THÁI "ĐANG ĐỢI AI" (BLUR)
+               ========================================= */
+            .input-wrapper {
+                transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+                opacity: 1;
+                filter: blur(0px);
+            }
+
+            .waiting-overlay {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background: rgba(255, 255, 255, 0.6);
+                backdrop-filter: blur(8px);
+                -webkit-backdrop-filter: blur(8px);
+                opacity: 0;
+                visibility: hidden;
+                transform: scale(0.95);
+                transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+                font-weight: 500;
+                color: #38bdf8; /* Màu xanh chủ đạo của nút Send */
+                font-size: 16px;
+                z-index: 20;
+                border-radius: 32px; /* Trùng với viền chat-input-container */
+            }
+
+            .dark .waiting-overlay {
+                background: rgba(30, 41, 59, 0.6);
+            }
+
+            /* Khi bật class .is-waiting */
+            #chat-input-container.is-waiting {
+                box-shadow: 0 5px 20px rgba(56, 189, 248, 0.15);
+            }
+            .dark #chat-input-container.is-waiting {
+                box-shadow: 0 5px 20px rgba(56, 189, 248, 0.1);
+            }
+
+            #chat-input-container.is-waiting .input-wrapper {
+                opacity: 0;
+                filter: blur(10px);
+                transform: scale(1.02);
+                pointer-events: none;
+            }
+
+            #chat-input-container.is-waiting .waiting-overlay {
+                opacity: 1;
+                visibility: visible;
+                transform: scale(1);
+            }
+
+            /* Animation dấu ba chấm */
+            .loading-dots span {
+                animation: bounce 1.4s infinite ease-in-out both;
+                display: inline-block;
+            }
+            .loading-dots span:nth-child(1) {
+                animation-delay: -0.32s;
+            }
+            .loading-dots span:nth-child(2) {
+                animation-delay: -0.16s;
+            }
+
+            @keyframes bounce {
+                0%,
+                80%,
+                100% {
+                    transform: translateY(0);
+                }
+                40% {
+                    transform: translateY(-4px);
+                }
+            }
         </style>
     </head>
     <!-- SỬA NỀN TRÌNH DUYỆT: Dùng màu nền base để chuyển đổi thay vì overlay giật cục -->
     <body
         class="bg-[#F4F9FD] dark:bg-[#0B1121] h-[100dvh] flex overflow-hidden text-[#1B1B1E] dark:text-[#F8FAFC] font-sans transition-colors duration-[800ms] ease-in-out relative"
     >
-        <!-- ĐÃ XÓA LỚP CINEMATIC DARK LAYER ĐỂ KHÔNG BỊ FLASH CHÓI -->
-
         <!-- NÚT TOGGLE SÁNG/TỐI -->
         <button
             id="theme-toggle"
@@ -218,14 +393,11 @@
         </button>
 
         <!-- SIDEBAR LƠ LỬNG -->
-        <!-- ĐÃ XÓA hover:-translate-y-1 ở đây để sidebar không bị nhích lên -->
         <div
-            class="hidden md:flex flex-col shrink-0 m-6 w-64 rounded-[32px] overflow-hidden sidebar-glass jelly-trigger relative z-10 cursor-pointer ui-locked transition-all"
+            class="hidden md:flex flex-col shrink-0 m-6 w-64 rounded-[32px] overflow-hidden sidebar-glass sidebar-spring relative z-10 cursor-pointer ui-locked transition-all"
         >
             <aside class="flex-1 flex flex-col w-full h-full relative">
-                <!-- Xóa border-b -->
                 <div class="p-6 transition-colors duration-700 relative">
-                    <!-- Divider ảo bằng màu nền nhẹ thay vì kẻ viền -->
                     <div
                         class="absolute bottom-0 left-6 right-6 h-[1px] bg-gray-200 dark:bg-gray-700/50 rounded-full"
                     ></div>
@@ -253,12 +425,26 @@
                     </h1>
                 </div>
                 <div class="flex-1 overflow-y-auto p-4 space-y-3 relative z-10">
-                    <!-- ĐÃ THÊM: hover:scale-105 để nút nảy nở to ra nhẹ nhàng -->
+                    <!-- Nút Đoạn chat mới -->
                     <button
                         id="new-chat-btn"
-                        class="w-full text-left px-5 py-3 rounded-full bg-[#394E5A] dark:bg-[#1E293B] text-[#38BDF8] text-sm font-medium hover:bg-[#475F6D] dark:hover:bg-[#2D3B4E] transition-all hover:scale-105 active:scale-95 shadow-md border-none"
+                        class="w-full flex items-center justify-center gap-2.5 px-5 py-3 rounded-full text-[#38BDF8] text-sm font-semibold btn-modern-glass group"
                     >
-                        + Đoạn chat mới
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke-width="2.5"
+                            stroke="currentColor"
+                            class="w-5 h-5 drop-shadow-sm"
+                        >
+                            <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                d="M12 4.5v15m7.5-7.5h-15"
+                            />
+                        </svg>
+                        <span class="tracking-wide">Đoạn chat mới</span>
                     </button>
                     <div
                         class="pt-8 pb-2 px-2 text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-[0.25em] transition-colors duration-700"
@@ -269,14 +455,13 @@
                         <!-- History List -->
                     </div>
                 </div>
-                <!-- Xóa border-t -->
                 <div
                     class="p-5 relative text-[10px] text-gray-400 dark:text-gray-500 text-center font-medium opacity-70 uppercase tracking-widest transition-colors duration-700"
                 >
                     <div
                         class="absolute top-0 left-8 right-8 h-[1px] bg-gray-200 dark:bg-gray-700/50 rounded-full"
                     ></div>
-                    QUI DESIGN
+                    DU QUI DESIGN
                 </div>
             </aside>
         </div>
@@ -302,7 +487,7 @@
                 id="chat-messages"
             >
                 <div class="message bot new-message">
-                    Xin chào Quí, hôm nay bạn muốn tìm hiểu thêm về kiến thức
+                    Xin chào bạn, hôm nay bạn muốn tìm hiểu thêm về kiến thức
                     tin học nào? Tôi luôn sẵn sàng hỗ trợ!
                 </div>
             </main>
@@ -330,6 +515,9 @@
                 </div>
             </div>
 
+            <!-- LỚP PHỦ KÍNH MỜ (BOTTOM GLASS) MỚI THÊM -->
+            <div class="bottom-glass-gradient"></div>
+
             <!-- PANEL NHẬP LIỆU -->
             <footer
                 class="absolute bottom-0 w-full p-10 md:p-14 pb-14 pointer-events-none z-20"
@@ -340,36 +528,51 @@
                     <!-- Bỏ toàn bộ Border, thay bằng Bóng (Shadow) -->
                     <div
                         id="chat-input-container"
-                        class="flex items-center gap-4 bg-white/80 dark:bg-[#1E293B]/80 backdrop-blur-[40px] -webkit-backdrop-blur-[40px] p-4 pl-8 border-none shadow-[0_15px_40px_rgba(0,0,0,0.05)] dark:shadow-[0_15px_40px_rgba(0,0,0,0.3)] rounded-[32px] focus-within:bg-white dark:focus-within:bg-[#1E293B] focus-within:shadow-[0_20px_50px_rgba(56,189,248,0.1)] relative overflow-hidden cursor-pointer transition-all duration-700"
+                        class="bg-white/80 dark:bg-[#1E293B]/80 backdrop-blur-[40px] -webkit-backdrop-blur-[40px] p-4 pl-8 border-none shadow-[0_15px_40px_rgba(0,0,0,0.05)] dark:shadow-[0_15px_40px_rgba(0,0,0,0.3)] rounded-[32px] focus-within:bg-white dark:focus-within:bg-[#1E293B] focus-within:shadow-[0_20px_50px_rgba(56,189,248,0.1)] relative overflow-hidden cursor-pointer transition-all duration-700"
                     >
-                        <input
-                            type="text"
-                            id="user-input"
-                            class="flex-1 bg-transparent py-2 focus:outline-none text-[#1B1B1E] dark:text-white font-light placeholder-gray-400 dark:placeholder-gray-400 text-lg relative z-10 select-text transition-colors duration-700"
-                            placeholder="Nhập câu hỏi của bạn..."
-                        />
-
-                        <button
-                            id="send-btn"
-                            class="bg-[#38BDF8] shadow-md hover:scale-105 text-[#1B1B1E] w-12 h-12 flex items-center justify-center relative z-10 border-none rounded-[18px] btn-send-spring"
+                        <!-- WRAPPER CHO CÁC THÀNH PHẦN CŨ (Đảm bảo layout flex không bị vỡ) -->
+                        <div
+                            class="input-wrapper flex items-center gap-4 w-full"
                         >
-                            <svg
-                                xmlns="http://www.w3.org/2000/svg"
-                                viewBox="0 0 24 24"
-                                fill="currentColor"
-                                class="w-6 h-6 ml-1 opacity-90"
+                            <input
+                                type="text"
+                                id="user-input"
+                                class="flex-1 bg-transparent py-2 focus:outline-none text-[#1B1B1E] dark:text-white font-light placeholder-gray-400 dark:placeholder-gray-400 text-lg relative z-10 select-text transition-colors duration-700"
+                                placeholder="Nhập câu hỏi của bạn..."
+                            />
+
+                            <button
+                                id="send-btn"
+                                class="bg-[#38BDF8] shadow-md hover:scale-105 text-[#1B1B1E] w-12 h-12 flex items-center justify-center relative z-10 border-none rounded-[18px] btn-send-spring"
                             >
-                                <path
-                                    d="M3.478 2.404a.75.75 0 0 0-.926.941l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.404Z"
-                                />
-                            </svg>
-                        </button>
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    viewBox="0 0 24 24"
+                                    fill="currentColor"
+                                    class="w-6 h-6 ml-1 opacity-90"
+                                >
+                                    <path
+                                        d="M3.478 2.404a.75.75 0 0 0-.926.941l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.404Z"
+                                    />
+                                </svg>
+                            </button>
+                        </div>
+
+                        <!-- LỚP OVERLAY CHỜ (MỚI THÊM) -->
+                        <div class="waiting-overlay">
+                            ✨ Đang đợi Gia Sư Số suy nghĩ
+                            <span class="loading-dots"
+                                ><span>.</span><span>.</span
+                                ><span>.</span></span
+                            >
+                        </div>
                     </div>
                 </div>
             </footer>
         </div>
 
         <script>
+            // JELLY LOGIC (Vẫn giữ lại cho các phần tử khác nếu sau này bạn dùng)
             document.querySelectorAll(".jelly-trigger").forEach((el) => {
                 el.addEventListener("mousedown", () => {
                     el.classList.remove("jelly-release");
@@ -406,6 +609,80 @@
                 const isDark = htmlEl.classList.contains("dark");
                 localStorage.setItem("theme", isDark ? "dark" : "light");
             });
+
+            // --- HÀM HỖ TRỢ HIỆU ỨNG CHỜ AI ---
+            window.toggleAIWaitingState = function (isWaiting) {
+                const inputContainer = document.getElementById(
+                    "chat-input-container",
+                );
+                const userInput = document.getElementById("user-input");
+
+                if (isWaiting) {
+                    inputContainer.classList.add("is-waiting");
+                    if (userInput) {
+                        userInput.blur();
+                    }
+                } else {
+                    inputContainer.classList.remove("is-waiting");
+                    if (userInput) {
+                        userInput.focus();
+                    }
+                }
+            };
+
+            // TÍNH NĂNG MỚI: THEO DÕI VÙNG CHAT ĐỂ ĐỒNG BỘ HIỆU ỨNG (KHÔNG GÂY LỖI SCOPE)
+            // Đặt trong cặp ngoặc nhọn {} để tạo "phòng cách ly" (Block Scope),
+            // đảm bảo biến không bị đụng hàng với script.js
+            {
+                const chatArea = document.getElementById("chat-messages");
+                if (chatArea) {
+                    const chatObserver = new MutationObserver((mutations) => {
+                        mutations.forEach((mutation) => {
+                            if (mutation.addedNodes.length > 0) {
+                                mutation.addedNodes.forEach((node) => {
+                                    if (node.nodeType === 1) {
+                                        const isUserMessage =
+                                            node.classList.contains("user") ||
+                                            node.querySelector(".user");
+                                        const isBotMessage =
+                                            node.classList.contains("bot") ||
+                                            node.querySelector(".bot");
+
+                                        if (isUserMessage) {
+                                            window.toggleAIWaitingState(true);
+                                        } else if (isBotMessage) {
+                                            window.toggleAIWaitingState(false);
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                    });
+                    chatObserver.observe(chatArea, {
+                        childList: true,
+                        subtree: true,
+                    });
+                }
+
+                // Theo dõi thêm trạng thái loading nếu có
+                const loadingBox = document.getElementById("loading");
+                if (loadingBox) {
+                    const loadingObserver = new MutationObserver(
+                        (mutations) => {
+                            mutations.forEach((mutation) => {
+                                if (mutation.attributeName === "class") {
+                                    if (
+                                        loadingBox.classList.contains("hidden")
+                                    ) {
+                                        window.toggleAIWaitingState(false);
+                                    }
+                                }
+                            });
+                        },
+                    );
+                    loadingObserver.observe(loadingBox, { attributes: true });
+                }
+            }
         </script>
 
         <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>

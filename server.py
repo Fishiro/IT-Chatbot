@@ -1,7 +1,8 @@
 import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 import socket
 
@@ -19,7 +20,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise ValueError("Thiếu GEMINI_API_KEY. Hãy kiểm tra file .env của bạn.")
 
-genai.configure(api_key=GEMINI_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 # --- Nạp Vector DB (Bộ não kiến thức) ---
 print("Đang nạp bộ nhớ Vector DB (faiss_index)...")
@@ -45,14 +46,10 @@ Hãy ưu tiên sử dụng thông tin từ phần [Tài liệu tham khảo] đư
 Hỏi đáp kiến thức lý thuyết súc tích. Hướng dẫn thao tác thực hành từng bước.
 """
 
-config = genai.types.GenerationConfig(
-    max_output_tokens=2048
-)
-
-model = genai.GenerativeModel(
-    model_name="gemini-2.5-flash-lite",
-    system_instruction=system_instruction,
-    generation_config=config
+# Gộp chung cấu hình và system_instruction theo chuẩn mới
+config = types.GenerateContentConfig(
+    max_output_tokens=2048,
+    system_instruction=system_instruction
 )
 
 active_sessions = {}
@@ -70,7 +67,10 @@ def chat():
         if session_id in active_sessions:
             chat_session = active_sessions[session_id]
         else:
-            chat_session = model.start_chat(history=[])
+            chat_session = client.chats.create(
+                model="gemini-2.5-flash-lite",
+                config=config
+            )
             active_sessions[session_id] = chat_session
 
         # --- Tích hợp tài liệu vào câu hỏi ---
