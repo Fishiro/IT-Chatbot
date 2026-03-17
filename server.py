@@ -13,7 +13,12 @@ from langchain_community.vectorstores import FAISS
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=[
+    "https://giasutinhoccanban.tech",
+    "https://it-chatbot.vercel.app",   # domain Vercel mặc định nếu có
+    "http://localhost:3000",
+    "http://localhost:5500",            # nếu dùng Live Server để test
+])
 
 # --- Cấu hình Gemini ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -51,6 +56,10 @@ config = types.GenerateContentConfig(
     max_output_tokens=2048,
     system_instruction=system_instruction
 )
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
 
 active_sessions = {}
 
@@ -132,5 +141,4 @@ if __name__ == "__main__":
     print(f"║{line2_2.ljust(width)}║")
     print(f"╚{'═' * width}╝")
 
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=5000, debug=False)

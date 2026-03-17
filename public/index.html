@@ -244,8 +244,7 @@
                     rgba(244, 249, 253, 0.95) 10%,
                     rgba(244, 249, 253, 0) 100%
                 );
-                backdrop-filter: blur(12px);
-                -webkit-backdrop-filter: blur(12px);
+                /* ĐÃ XÓA backdrop-filter — nguyên nhân gây chớp nháy khi đổi theme */
                 -webkit-mask-image: linear-gradient(
                     to top,
                     black 30%,
@@ -258,6 +257,7 @@
                 );
                 pointer-events: none;
                 z-index: 15; /* Nằm dưới input (z-20) nhưng trên chat (z-10) */
+                /* Kéo dài transition để đồng bộ với body (800ms) */
                 transition: background 0.8s ease-in-out;
             }
 

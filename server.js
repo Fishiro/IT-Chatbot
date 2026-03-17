@@ -3,7 +3,7 @@ import cors from "cors";
 import axios from "axios";
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(cors());
@@ -11,6 +11,10 @@ app.use(express.static("public"));
 
 // URL của máy chủ Python backend (đang chạy trên cổng 5000)
 const PYTHON_BACKEND_URL = "http://localhost:5000/api/chat";
+
+app.get("/health", (req, res) => {
+    res.json({ status: "ok" });
+});
 
 app.post("/api/chat", async (req, res) => {
     try {
@@ -23,7 +27,7 @@ app.post("/api/chat", async (req, res) => {
         }
 
         console.log(
-            `Node.js (Gateway) nhận được tin nhắn cho session: ${sessionID}`
+            `Node.js (Gateway) nhận được tin nhắn cho session: ${sessionID}`,
         );
 
         // Chuyển tiếp yêu cầu đến máy chủ Python
@@ -41,13 +45,13 @@ app.post("/api/chat", async (req, res) => {
             console.error(
                 "Lỗi từ backend Python:",
                 error.response.status,
-                error.response.data
+                error.response.data,
             );
             res.status(error.response.status).json(error.response.data);
         } else if (error.request) {
             console.error(
                 "Không thể kết nối đến máy chủ Python:",
-                error.message
+                error.message,
             );
             res.status(502).json({
                 error: "Bad Gateway - Không thể kết nối đến dịch vụ AI.",
@@ -63,9 +67,9 @@ app.post("/api/chat", async (req, res) => {
 
 app.listen(port, "0.0.0.0", () => {
     console.log(
-        `Máy chủ Node.js (Gateway) đang chạy tại http://localhost:${port}`
+        `Máy chủ Node.js (Gateway) đang chạy tại http://localhost:${port}`,
     );
     console.log(
-        `Đang chuyển tiếp yêu cầu đến backend Python tại ${PYTHON_BACKEND_URL}`
+        `Đang chuyển tiếp yêu cầu đến backend Python tại ${PYTHON_BACKEND_URL}`,
     );
 });

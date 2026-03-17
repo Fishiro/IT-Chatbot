@@ -4,7 +4,11 @@ const chatMessages = document.getElementById("chat-messages");
 const historyList = document.getElementById("history-list");
 const newChatBtn = document.getElementById("new-chat-btn");
 
-const API_URL = "https://it-chatbot-lyg3.onrender.com/api/chat";
+const API_URL =
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1"
+        ? "http://localhost:3000/api/chat"
+        : "https://it-chatbot-lyg3.onrender.com/api/chat";
 
 // --- QUẢN LÝ TRẠNG THÁI (Lưu trong phiên, F5 là mất) ---
 let sessions = {}; // Cấu trúc: { id: { title: "...", messages: [ {sender, text} ] } }
@@ -27,12 +31,10 @@ async function sendMessage() {
     const userMessage = userInput.value.trim();
     if (userMessage === "" || userInput.disabled) return;
 
-    // 1. Tạo mới session trong bộ nhớ nếu chưa có
     if (!sessions[currentSessionID]) {
         sessions[currentSessionID] = { title: currentTitle, messages: [] };
     }
 
-    // 2. Lưu tin nhắn User
     addMessageToChat("user", userMessage);
     sessions[currentSessionID].messages.push({
         sender: "user",
@@ -40,21 +42,26 @@ async function sendMessage() {
     });
     userInput.value = "";
 
-    // Vô hiệu hóa input khi bot đang "suy nghĩ"
     userInput.disabled = true;
     sendBtn.disabled = true;
-
-    // THÊM VÀO ĐÂY: Khóa luôn nút New Chat để tránh spam
     newChatBtn.disabled = true;
     newChatBtn.classList.add("opacity-50", "pointer-events-none");
 
-    // 3. Nếu là tin nhắn đầu tiên, bí mật nhờ AI đặt tên!
     if (isFirstMessage) {
         isFirstMessage = false;
-        generateAITitle(userMessage); // Chạy ngầm không ảnh hưởng tới luồng chat
+        generateAITitle(userMessage);
     }
 
-    // 4. Gọi API để chat bình thường
+    // ✅ THÊM VÀO ĐÂY — hiện thông báo trước khi fetch
+    const warmingMsg = document.querySelector(".warming-notice");
+    if (!warmingMsg) {
+        const notice = document.createElement("div");
+        notice.className = "message bot new-message warming-notice";
+        notice.textContent = "⏳ Đang kết nối máy chủ, vui lòng chờ...";
+        chatMessages.appendChild(notice);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
     try {
         const response = await fetch(API_URL, {
             method: "POST",
@@ -63,7 +70,11 @@ async function sendMessage() {
                 message: userMessage,
                 sessionID: currentSessionID,
             }),
+            signal: AbortSignal.timeout(60000),
         });
+
+        // ✅ XÓA thông báo chờ khi đã có phản hồi
+        document.querySelector(".warming-notice")?.remove();
 
         if (!response.ok) throw new Error("Lỗi kết nối đến máy chủ backend.");
 
@@ -75,14 +86,32 @@ async function sendMessage() {
             sender: "bot",
             text: botMessage,
         });
+
+        // ✅ Tự động lưu session vào sidebar ngay sau lần bot trả lời đầu tiên
+        const isFirstBotReply =
+            sessions[currentSessionID].messages.filter(
+                (m) => m.sender === "bot",
+            ).length === 1;
+        if (isFirstBotReply) {
+            addSessionToHistoryUI(
+                currentSessionID,
+                sessions[currentSessionID].title,
+            );
+        }
     } catch (error) {
+        // ✅ XÓA thông báo chờ nếu lỗi
+        document.querySelector(".warming-notice")?.remove();
+
         console.error("Lỗi:", error);
-        addMessageToChat(
-            "bot",
-            "Xin lỗi, tôi đang gặp sự cố. Vui lòng thử lại sau.",
-        );
+        const errMsg =
+            error.name === "TimeoutError"
+                ? "Máy chủ đang khởi động (cold start), vui lòng gửi lại sau 30 giây."
+                : "Xin lỗi, tôi đang gặp sự cố. Vui lòng thử lại sau.";
+        addMessageToChat("bot", errMsg);
         userInput.disabled = false;
         sendBtn.disabled = false;
+        newChatBtn.disabled = false;
+        newChatBtn.classList.remove("opacity-50", "pointer-events-none");
         userInput.focus();
     }
 }
@@ -107,9 +136,14 @@ async function generateAITitle(firstMessage) {
         currentTitle = aiTitle;
         sessions[currentSessionID].title = currentTitle;
 
-        // Nếu người dùng đang xem đoạn chat này ở sidebar, cập nhật tên luôn (nếu đã tạo nút)
+        // Cập nhật tên nút trong sidebar (nếu đã có)
         const histBtn = document.getElementById(`hist-${currentSessionID}`);
-        if (histBtn) histBtn.textContent = currentTitle;
+        if (histBtn) {
+            histBtn.querySelector(".hist-title")
+                ? (histBtn.querySelector(".hist-title").textContent =
+                      currentTitle)
+                : (histBtn.textContent = currentTitle);
+        }
     } catch (error) {
         // Fallback: Lấy 20 ký tự đầu nếu API lỗi
         currentTitle = firstMessage.substring(0, 20) + "...";
@@ -142,7 +176,14 @@ newChatBtn.addEventListener("click", () => {
     document
         .querySelectorAll(".history-item")
         .forEach((b) =>
-            b.classList.remove("bg-gray-200", "ring-2", "ring-black"),
+            b.classList.remove(
+                "bg-gray-200",
+                "dark:bg-gray-700/50",
+                "ring-1",
+                "ring-gray-300",
+                "dark:ring-gray-600",
+                "font-medium",
+            ),
         );
 
     addMessageToChat(
@@ -159,17 +200,42 @@ function addSessionToHistoryUI(id, title) {
     const btn = document.createElement("button");
     btn.id = `hist-${id}`;
     btn.className =
-        "history-item w-full text-left px-3 py-2 rounded-lg text-sm text-gray-700 hover:bg-gray-200 truncate transition";
-    btn.textContent = title;
+        "history-item w-full text-left px-3 py-2 rounded-lg text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700/50 truncate transition-all duration-200 flex items-center gap-2";
 
-    btn.addEventListener("click", () => {
-        // Highlight nút đang chọn
+    // Icon cuộc hội thoại
+    btn.innerHTML = `
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 shrink-0 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+        </svg>
+        <span class="hist-title truncate">${title}</span>
+    `;
+
+    // Highlight nút active
+    const setActive = () => {
         document
             .querySelectorAll(".history-item")
             .forEach((b) =>
-                b.classList.remove("bg-gray-200", "ring-2", "ring-black"),
+                b.classList.remove(
+                    "bg-gray-200",
+                    "dark:bg-gray-700/50",
+                    "ring-1",
+                    "ring-gray-300",
+                    "dark:ring-gray-600",
+                    "font-medium",
+                ),
             );
-        btn.classList.add("bg-gray-200", "ring-2", "ring-black");
+        btn.classList.add(
+            "bg-gray-200",
+            "dark:bg-gray-700/50",
+            "ring-1",
+            "ring-gray-300",
+            "dark:ring-gray-600",
+            "font-medium",
+        );
+    };
+
+    btn.addEventListener("click", () => {
+        setActive();
 
         // Nếu người dùng đang nhắn dở đoạn chat hiện tại mà chưa lưu, thì lưu tạm vào UI
         if (
@@ -196,6 +262,30 @@ function addSessionToHistoryUI(id, title) {
     });
 
     historyList.prepend(btn); // Đẩy lên trên cùng của danh sách
+
+    // Highlight ngay nếu đây là session đang active
+    if (id === currentSessionID) {
+        document
+            .querySelectorAll(".history-item")
+            .forEach((b) =>
+                b.classList.remove(
+                    "bg-gray-200",
+                    "dark:bg-gray-700/50",
+                    "ring-1",
+                    "ring-gray-300",
+                    "dark:ring-gray-600",
+                    "font-medium",
+                ),
+            );
+        btn.classList.add(
+            "bg-gray-200",
+            "dark:bg-gray-700/50",
+            "ring-1",
+            "ring-gray-300",
+            "dark:ring-gray-600",
+            "font-medium",
+        );
+    }
 }
 
 // Hàm render UI tin nhắn (Đã fix lỗi gõ Markdown)
@@ -228,6 +318,11 @@ function addMessageToChat(sender, message, isTyping = false) {
                     chatMessages.scrollTop = chatMessages.scrollHeight;
                 userInput.disabled = false;
                 sendBtn.disabled = false;
+                newChatBtn.disabled = false;
+                newChatBtn.classList.remove(
+                    "opacity-50",
+                    "pointer-events-none",
+                );
                 userInput.focus();
             }
         }
