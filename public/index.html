@@ -231,20 +231,28 @@
 
             /* =========================================
                1. LỚP PHỦ GRADIENT KÍNH (BOTTOM GLASS)
+               =========================================
+               FIX CHỚP NHÁY:
+               linear-gradient là background-IMAGE, CSS không thể
+               interpolate giữa 2 image khác nhau → dùng ::before (light)
+               và ::after (dark) rồi transition OPACITY thay thế.
                ========================================= */
             .bottom-glass-gradient {
                 position: absolute;
                 bottom: 0;
                 left: 0;
                 width: 100%;
-                height: 180px; /* Độ cao vùng mờ */
-                /* Màu nền tương thích với bg-[#F4F9FD] ban đầu */
-                background: linear-gradient(
-                    to top,
-                    rgba(244, 249, 253, 0.95) 10%,
-                    rgba(244, 249, 253, 0) 100%
-                );
-                /* ĐÃ XÓA backdrop-filter — nguyên nhân gây chớp nháy khi đổi theme */
+                height: 180px;
+                pointer-events: none;
+                z-index: 15;
+            }
+
+            /* Lớp chung cho cả hai pseudo-elements */
+            .bottom-glass-gradient::before,
+            .bottom-glass-gradient::after {
+                content: "";
+                position: absolute;
+                inset: 0;
                 -webkit-mask-image: linear-gradient(
                     to top,
                     black 30%,
@@ -255,19 +263,36 @@
                     black 30%,
                     transparent 100%
                 );
-                pointer-events: none;
-                z-index: 15; /* Nằm dưới input (z-20) nhưng trên chat (z-10) */
-                /* Kéo dài transition để đồng bộ với body (800ms) */
-                transition: background 0.8s ease-in-out;
+                /* Chỉ transition opacity — đây là thứ animate được mượt */
+                transition: opacity 0.8s ease-in-out;
             }
 
-            /* Kính ở Dark Mode tương thích với bg-[#0B1121] */
-            .dark .bottom-glass-gradient {
+            /* ::before = Light mode gradient */
+            .bottom-glass-gradient::before {
                 background: linear-gradient(
                     to top,
-                    rgba(11, 17, 33, 0.95) 10%,
+                    rgba(244, 249, 253, 1) 10%,
+                    rgba(244, 249, 253, 0) 100%
+                );
+                opacity: 1;
+            }
+
+            /* ::after = Dark mode gradient */
+            .bottom-glass-gradient::after {
+                background: linear-gradient(
+                    to top,
+                    rgba(11, 17, 33, 1) 10%,
                     rgba(11, 17, 33, 0) 100%
                 );
+                opacity: 0;
+            }
+
+            /* Khi Dark: ẩn light, hiện dark */
+            .dark .bottom-glass-gradient::before {
+                opacity: 0;
+            }
+            .dark .bottom-glass-gradient::after {
+                opacity: 1;
             }
 
             /* =========================================
