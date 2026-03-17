@@ -12,6 +12,7 @@ app.use(express.static("public"));
 // URL của máy chủ Python backend (đang chạy trên cổng 5000)
 const PYTHON_BACKEND_URL = "http://localhost:5000/api/chat";
 
+app.head("/health", (req, res) => res.sendStatus(200));
 app.get("/health", (req, res) => {
     res.json({ status: "ok" });
 });

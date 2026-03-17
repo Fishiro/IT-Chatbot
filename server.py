@@ -1,6 +1,7 @@
 import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask import send_from_directory
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
@@ -19,6 +20,13 @@ CORS(app, origins=[
     "http://localhost:3000",
     "http://localhost:5500",            # nếu dùng Live Server để test
 ])
+
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def serve_frontend(path):
+    if path and os.path.exists(os.path.join("public", path)):
+        return send_from_directory("public", path)
+    return send_from_directory("public", "index.html")
 
 # --- Cấu hình Gemini ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -57,7 +65,7 @@ config = types.GenerateContentConfig(
     system_instruction=system_instruction
 )
 
-@app.route("/health", methods=["GET"])
+@app.route("/health", methods=["GET", "HEAD"])
 def health():
     return jsonify({"status": "ok"}), 200
 
@@ -77,7 +85,7 @@ def chat():
             chat_session = active_sessions[session_id]
         else:
             chat_session = client.chats.create(
-                model="gemini-2.5-flash-lite",
+                model="gemini-2.0-flash",
                 config=config
             )
             active_sessions[session_id] = chat_session
