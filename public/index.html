@@ -374,6 +374,80 @@
                     transform: translateY(-4px);
                 }
             }
+
+            /* =============================================
+               MOBILE INPUT: TEXTAREA + ANIMATED SEND BTN
+               ============================================= */
+
+            /* Textarea: hành xử như input text (không resize thủ công) */
+            #user-input {
+                resize: none;
+                overflow-y: hidden;
+                line-height: 1.6;
+                /* Đồng bộ với transition chung của input */
+                transition:
+                    height 0.25s ease,
+                    color 0.7s ease;
+            }
+
+            /* Wrapper của nút gửi — desktop: trong suốt, flex inline */
+            .send-btn-wrapper {
+                display: flex;
+                align-items: center;
+                flex-shrink: 0;
+            }
+
+            /* ---- MOBILE ONLY ---- */
+            @media (max-width: 767px) {
+                /* Input wrapper chuyển sang cột */
+                .input-wrapper {
+                    flex-direction: column !important;
+                    align-items: stretch !important;
+                    gap: 0 !important;
+                }
+
+                /* Textarea: có thể cuộn khi quá 130px */
+                #user-input {
+                    width: 100%;
+                    max-height: 130px;
+                    overflow-y: auto;
+                }
+
+                /* Wrapper nút gửi: ẩn mặc định, xuất hiện khi có chữ */
+                .send-btn-wrapper {
+                    justify-content: flex-end;
+                    /* Trạng thái ẩn */
+                    max-height: 0;
+                    padding-top: 0;
+                    opacity: 0;
+                    overflow: hidden;
+                    transform: translateY(8px) scale(0.85);
+                    pointer-events: none;
+                    transition:
+                        max-height 0.45s cubic-bezier(0.34, 1.56, 0.64, 1),
+                        padding-top 0.35s ease,
+                        opacity 0.3s ease 0.05s,
+                        transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+                }
+
+                /* Trạng thái hiện — khi input-wrapper có class .has-text */
+                .input-wrapper.has-text .send-btn-wrapper {
+                    max-height: 64px;
+                    padding-top: 10px;
+                    opacity: 1;
+                    overflow: visible;
+                    transform: translateY(0) scale(1);
+                    pointer-events: auto;
+                }
+
+                /* Nút gửi trên mobile: bo tròn hơn, to hơn chút */
+                .input-wrapper .send-btn-wrapper #send-btn {
+                    width: 48px;
+                    height: 48px;
+                    border-radius: 50%;
+                    box-shadow: 0 6px 20px rgba(56, 189, 248, 0.45);
+                }
+            }
         </style>
     </head>
     <!-- SỬA NỀN TRÌNH DUYỆT: Dùng màu nền base để chuyển đổi thay vì overlay giật cục -->
@@ -558,29 +632,33 @@
                         <!-- WRAPPER CHO CÁC THÀNH PHẦN CŨ (Đảm bảo layout flex không bị vỡ) -->
                         <div
                             class="input-wrapper flex items-center gap-4 w-full"
+                            id="input-wrapper"
                         >
-                            <input
-                                type="text"
+                            <textarea
                                 id="user-input"
-                                class="flex-1 bg-transparent py-2 focus:outline-none text-[#1B1B1E] dark:text-white font-light placeholder-gray-400 dark:placeholder-gray-400 text-lg relative z-10 select-text transition-colors duration-700"
+                                rows="1"
+                                class="flex-1 bg-transparent py-2 focus:outline-none text-[#1B1B1E] dark:text-white font-light placeholder-gray-400 dark:placeholder-gray-400 text-lg relative z-10 select-text"
                                 placeholder="Nhập câu hỏi của bạn..."
-                            />
+                            ></textarea>
 
-                            <button
-                                id="send-btn"
-                                class="bg-[#38BDF8] shadow-md hover:scale-105 text-[#1B1B1E] w-12 h-12 flex items-center justify-center relative z-10 border-none rounded-[18px] btn-send-spring"
-                            >
-                                <svg
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    viewBox="0 0 24 24"
-                                    fill="currentColor"
-                                    class="w-6 h-6 ml-1 opacity-90"
+                            <!-- Bọc button để mobile có thể animate wrapper -->
+                            <div class="send-btn-wrapper">
+                                <button
+                                    id="send-btn"
+                                    class="bg-[#38BDF8] shadow-md hover:scale-105 text-[#1B1B1E] w-12 h-12 flex items-center justify-center relative z-10 border-none rounded-[18px] btn-send-spring"
                                 >
-                                    <path
-                                        d="M3.478 2.404a.75.75 0 0 0-.926.941l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.404Z"
-                                    />
-                                </svg>
-                            </button>
+                                    <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        viewBox="0 0 24 24"
+                                        fill="currentColor"
+                                        class="w-6 h-6 ml-1 opacity-90"
+                                    >
+                                        <path
+                                            d="M3.478 2.404a.75.75 0 0 0-.926.941l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.404Z"
+                                        />
+                                    </svg>
+                                </button>
+                            </div>
                         </div>
 
                         <!-- LỚP OVERLAY CHỜ (MỚI THÊM) -->

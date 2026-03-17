@@ -21,9 +21,45 @@ function generateSessionID() {
 }
 
 sendBtn.addEventListener("click", sendMessage);
-userInput.addEventListener("keypress", function (e) {
-    if (e.key === "Enter") {
+
+// Textarea: Enter gửi, Shift+Enter xuống dòng
+userInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
         sendMessage();
+    }
+});
+
+// ---- AUTO-RESIZE & SHOW/HIDE SEND BTN (MOBILE) ----
+const inputWrapper = document.getElementById("input-wrapper");
+
+function autoResizeTextarea() {
+    // Reset về auto để tính đúng scrollHeight
+    userInput.style.height = "auto";
+
+    const isMobile = window.innerWidth < 768;
+    if (isMobile) {
+        // Co giãn theo nội dung, tối đa 130px
+        userInput.style.height = Math.min(userInput.scrollHeight, 130) + "px";
+        // Hiện/ẩn nút gửi
+        if (userInput.value.trim().length > 0) {
+            inputWrapper.classList.add("has-text");
+        } else {
+            inputWrapper.classList.remove("has-text");
+        }
+    } else {
+        // Desktop: textarea 1 dòng cố định
+        userInput.style.height = userInput.scrollHeight + "px";
+    }
+}
+
+userInput.addEventListener("input", autoResizeTextarea);
+
+// Reset khi resize cửa sổ (mobile ↔ desktop)
+window.addEventListener("resize", () => {
+    autoResizeTextarea();
+    if (window.innerWidth >= 768) {
+        inputWrapper.classList.remove("has-text");
     }
 });
 
@@ -41,6 +77,9 @@ async function sendMessage() {
         text: userMessage,
     });
     userInput.value = "";
+    // Reset textarea về 1 dòng và ẩn nút gửi (mobile)
+    userInput.style.height = "auto";
+    inputWrapper.classList.remove("has-text");
 
     userInput.disabled = true;
     sendBtn.disabled = true;
