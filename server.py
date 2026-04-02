@@ -1,7 +1,7 @@
 import os
-from flask import Flask, request, jsonify
+import threading
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-from flask import send_from_directory
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
@@ -16,11 +16,13 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app, origins=[
     "https://giasutinhoccanban.tech",
-    "https://it-chatbot.vercel.app",   # domain Vercel mặc định nếu có
+    "https://it-chatbot.vercel.app",
     "http://localhost:3000",
-    "http://localhost:5500",            # nếu dùng Live Server để test
+    "http://localhost:5000",
+    "http://localhost:5500",
 ])
 
+# --- Phục vụ Frontend tĩnh (dùng khi deploy trực tiếp Python, không qua Node gateway) ---
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def serve_frontend(path):
@@ -35,23 +37,7 @@ if not GEMINI_API_KEY:
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# --- Nạp Vector DB (Bộ não kiến thức) ---
-print("Đang nạp bộ nhớ Vector DB (faiss_index)...")
-embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/gemini-embedding-001", 
-    google_api_key=GEMINI_API_KEY
-)
-
-try:
-    # allow_dangerous_deserialization=True là bắt buộc ở các phiên bản Langchain mới khi load file local
-    vectorstore = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3}) # Lấy 3 đoạn liên quan nhất
-    print("-> Đã nạp thành công bộ não AI!")
-except Exception as e:
-    print(f"-> Không tìm thấy hoặc lỗi nạp Vector DB: {e}")
-    retriever = None
-
-# --- Prompt Hệ thống mới ---
+# --- Prompt Hệ thống ---
 system_instruction = """Bạn là một "Gia sư số Tin học căn bản theo Thông tư số 11/2018/TT-BLĐTBXH".
 Nhiệm vụ của bạn là giải thích các khái niệm tin học cơ bản, tập trung vào tính chính xác, hướng dẫn thực hành từng bước, và dễ hiểu.
 
@@ -59,15 +45,45 @@ Hãy ưu tiên sử dụng thông tin từ phần [Tài liệu tham khảo] đư
 Hỏi đáp kiến thức lý thuyết súc tích. Hướng dẫn thao tác thực hành từng bước.
 """
 
-# Gộp chung cấu hình và system_instruction theo chuẩn mới
 config = types.GenerateContentConfig(
     max_output_tokens=2048,
     system_instruction=system_instruction
 )
 
+# ============================================================
+# FIX DEPLOY: Load FAISS trong background thread
+# → Flask bind port ngay lập tức, Render không bị timeout
+# → Các request đầu tiên dùng kiến thức nền Gemini (retriever=None)
+# → Sau ~30-60s FAISS sẵn sàng, các request sau dùng RAG đầy đủ
+# ============================================================
+retriever = None
+
+def load_vectorstore():
+    global retriever
+    print("🔄 [Background] Đang nạp Vector DB (faiss_index)...")
+    try:
+        embeddings = GoogleGenerativeAIEmbeddings(
+            model="models/gemini-embedding-001",
+            google_api_key=GEMINI_API_KEY
+        )
+        vectorstore = FAISS.load_local(
+            "faiss_index", embeddings, allow_dangerous_deserialization=True
+        )
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+        print("✅ [Background] Đã nạp thành công bộ não AI!")
+    except Exception as e:
+        print(f"❌ [Background] Không tìm thấy hoặc lỗi nạp Vector DB: {e}")
+        retriever = None
+
+# Khởi động thread ngay khi app load — không block Flask
+threading.Thread(target=load_vectorstore, daemon=True).start()
+
+# ============================================================
+
+# FIX PING: Hỗ trợ cả GET lẫn HEAD (UptimeRobot dùng HEAD)
 @app.route("/health", methods=["GET", "HEAD"])
 def health():
-    return jsonify({"status": "ok"}), 200
+    return jsonify({"status": "ok", "vectordb": retriever is not None}), 200
 
 active_sessions = {}
 
@@ -85,18 +101,19 @@ def chat():
             chat_session = active_sessions[session_id]
         else:
             chat_session = client.chats.create(
-                model="gemini-2.0-flash",
+                # FIX QUOTA: gemini-2.0-flash có 1500 req/ngày thay vì 20
+                model="gemini-2.5-flash",
                 config=config
             )
             active_sessions[session_id] = chat_session
 
-        # --- Tích hợp tài liệu vào câu hỏi ---
+        # --- Tích hợp RAG nếu Vector DB đã sẵn sàng ---
         if retriever:
-            # Lục tìm tài liệu
             docs = retriever.invoke(user_message)
-            context = "\n\n".join([f"- Nội dung: {doc.page_content} \n(Nguồn: {doc.metadata.get('source', 'Không rõ')})" for doc in docs])
-            
-            # Gắn tài liệu vào sau lưng câu hỏi của người dùng một cách bí mật
+            context = "\n\n".join([
+                f"- Nội dung: {doc.page_content} \n(Nguồn: {doc.metadata.get('source', 'Không rõ')})"
+                for doc in docs
+            ])
             augmented_message = f"[Tài liệu tham khảo]:\n{context}\n\n[Câu hỏi của tôi]: {user_message}"
         else:
             augmented_message = user_message
@@ -107,7 +124,7 @@ def chat():
     except Exception as e:
         import traceback
         print("--- LỖI CHI TIẾT TỪ SERVER ---")
-        traceback.print_exc() # Dòng này sẽ in ra chính xác thư viện nào bị thiếu hoặc lỗi
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 
@@ -118,7 +135,7 @@ def get_local_ip():
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
     except Exception:
-        ip = "127.0.0.1" 
+        ip = "127.0.0.1"
     finally:
         if s:
             s.close()
@@ -127,14 +144,13 @@ def get_local_ip():
 
 if __name__ == "__main__":
     local_ip = get_local_ip()
-    node_port = 3000   
-    flask_port = 5000  
+    node_port = 3000
+    flask_port = 5000
 
     width = 60
     title1 = "  ► Máy chủ Python (Backend) đã sẵn sàng."
     line1_1 = f"     - Đang chạy tại: http://localhost:{flask_port}"
     line1_2 = f"     - Chấp nhận kết nối từ: 0.0.0.0:{flask_port}"
-
     title2 = "  ► ĐƯỜNG DẪN TRUY CẬP CHATBOT:"
     line2_1 = f"     Mở trên máy này: http://localhost:{node_port}"
     line2_2 = f"     Mở thiết bị khác: http://{local_ip}:{node_port}"
@@ -143,10 +159,10 @@ if __name__ == "__main__":
     print(f"║{title1.ljust(width)}║")
     print(f"║{line1_1.ljust(width)}║")
     print(f"║{line1_2.ljust(width)}║")
-    print(f"╟{'─' * width}╢")  
+    print(f"╟{'─' * width}╢")
     print(f"║{title2.ljust(width)}║")
     print(f"║{line2_1.ljust(width)}║")
     print(f"║{line2_2.ljust(width)}║")
     print(f"╚{'═' * width}╝")
 
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=flask_port, debug=False)
