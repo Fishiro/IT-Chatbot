@@ -1,10 +1,4 @@
 {
     "outputDirectory": "public",
-    "framework": null,
-    "rewrites": [
-        {
-            "source": "/api/:path*",
-            "destination": "https://it-chatbot-lyg3.onrender.com/api/:path*"
-        }
-    ]
+    "framework": null
 }

@@ -8,7 +8,7 @@ const API_URL =
     window.location.hostname === "localhost" ||
     window.location.hostname === "127.0.0.1"
         ? "http://localhost:5000/api/chat" // ← local gọi thẳng Python
-        : "/api/chat";
+        : "https://it-chatbot-lyg3.onrender.com/api/chat";
 
 // --- QUẢN LÝ TRẠNG THÁI (Lưu trong phiên, F5 là mất) ---
 let sessions = {}; // Cấu trúc: { id: { title: "...", messages: [ {sender, text} ] } }
