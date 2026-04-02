@@ -3,8 +3,8 @@
     "framework": null,
     "rewrites": [
         {
-            "source": "/api/(.*)",
-            "destination": "https://it-chatbot-lyg3.onrender.com/api/$1"
+            "source": "/api/:path*",
+            "destination": "https://it-chatbot-lyg3.onrender.com/api/:path*"
         }
     ]
 }
