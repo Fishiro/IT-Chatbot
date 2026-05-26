@@ -3,6 +3,7 @@ const userInput = document.getElementById("user-input");
 const chatMessages = document.getElementById("chat-messages");
 const historyList = document.getElementById("history-list");
 const newChatBtn = document.getElementById("new-chat-btn");
+const inputWrapper = document.getElementById("input-wrapper");
 
 const API_URL =
     window.location.hostname === "localhost" ||
@@ -10,11 +11,16 @@ const API_URL =
         ? "http://localhost:5000/api/chat"
         : "/api/chat";
 
-// --- QUẢN LÝ TRẠNG THÁI (Lưu trong phiên, F5 là mất) ---
-let sessions = {}; // Cấu trúc: { id: { title: "...", messages: [ {sender, text} ] } }
+// --- QUẢN LÝ TRẠNG THÁI ---
+let currentAbortController = null;
+let currentTypingTimeout = null; // BIẾN MỚI: Dùng để quản lý tiến trình gõ phím của bot
+let sessions = {};
 let currentSessionID = generateSessionID();
 let currentTitle = "Đoạn chat mới";
 let isFirstMessage = true;
+
+// Khởi tạo session mặc định đầu tiên
+sessions[currentSessionID] = { title: currentTitle, messages: [] };
 
 function generateSessionID() {
     return `session-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -31,31 +37,23 @@ userInput.addEventListener("keydown", function (e) {
 });
 
 // ---- AUTO-RESIZE & SHOW/HIDE SEND BTN (MOBILE) ----
-const inputWrapper = document.getElementById("input-wrapper");
-
 function autoResizeTextarea() {
-    // Reset về auto để tính đúng scrollHeight
     userInput.style.height = "auto";
-
     const isMobile = window.innerWidth < 768;
     if (isMobile) {
-        // Co giãn theo nội dung, tối đa 130px
         userInput.style.height = Math.min(userInput.scrollHeight, 130) + "px";
-        // Hiện/ẩn nút gửi
         if (userInput.value.trim().length > 0) {
             inputWrapper.classList.add("has-text");
         } else {
             inputWrapper.classList.remove("has-text");
         }
     } else {
-        // Desktop: textarea 1 dòng cố định
         userInput.style.height = userInput.scrollHeight + "px";
     }
 }
 
 userInput.addEventListener("input", autoResizeTextarea);
 
-// Reset khi resize cửa sổ (mobile ↔ desktop)
 window.addEventListener("resize", () => {
     autoResizeTextarea();
     if (window.innerWidth >= 768) {
@@ -63,137 +61,137 @@ window.addEventListener("resize", () => {
     }
 });
 
+// --- HÀM GỬI TIN NHẮN ---
 async function sendMessage() {
-    const userMessage = userInput.value.trim();
-    if (userMessage === "" || userInput.disabled) return;
+    const message = userInput.value.trim();
+    if (!message) return;
 
-    if (!sessions[currentSessionID]) {
-        sessions[currentSessionID] = { title: currentTitle, messages: [] };
-    }
+    // Lưu tin nhắn của user vào session
+    sessions[currentSessionID].messages.push({ sender: "user", text: message });
+    addMessageToChat("user", message);
 
-    addMessageToChat("user", userMessage);
-    sessions[currentSessionID].messages.push({
-        sender: "user",
-        text: userMessage,
-    });
+    // Reset input
     userInput.value = "";
-    // Reset textarea về 1 dòng và ẩn nút gửi (mobile)
-    userInput.style.height = "auto";
-    inputWrapper.classList.remove("has-text");
+    autoResizeTextarea();
 
-    userInput.disabled = true;
-    sendBtn.disabled = true;
-    newChatBtn.disabled = true;
-    newChatBtn.classList.add("opacity-50", "pointer-events-none");
+    // Biến cờ cục bộ để biết đây có phải là tin đầu tiên không
+    let wasFirstMessage = false;
 
+    // Thiết lập UI nếu là tin nhắn đầu
     if (isFirstMessage) {
         isFirstMessage = false;
-        generateAITitle(userMessage);
+        wasFirstMessage = true;
+
+        // Hiện ngay đoạn chat lên Sidebar với tên trích xuất tạm từ tin nhắn
+        let tempTitle = message.substring(0, 25);
+        if (message.length > 25) tempTitle += "...";
+        currentTitle = tempTitle;
+        sessions[currentSessionID].title = currentTitle;
+        addSessionToHistoryUI(currentSessionID, currentTitle);
+
+        // LƯU Ý: Không gọi generateAITitle ở đây nữa để tránh làm chết Server Python cục bộ
     }
 
-    // ✅ THÊM VÀO ĐÂY — hiện thông báo trước khi fetch
-    const warmingMsg = document.querySelector(".warming-notice");
-    if (!warmingMsg) {
-        const notice = document.createElement("div");
-        notice.className = "message bot new-message warming-notice";
-        notice.textContent = "⏳ Đang kết nối máy chủ, vui lòng chờ...";
-        chatMessages.appendChild(notice);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
+    // Khóa UI & Hiển thị indicator
+    if (typeof showThinkingIndicator === "function") showThinkingIndicator();
+    userInput.disabled = true;
+    sendBtn.disabled = true;
+
+    // Hủy request trước đó nếu đang chạy ngầm
+    if (currentAbortController) {
+        currentAbortController.abort();
+    }
+    currentAbortController = new AbortController();
+    const signal = currentAbortController.signal;
+
+    // Hủy hiệu ứng gõ chữ cũ nếu có
+    if (currentTypingTimeout) {
+        clearTimeout(currentTypingTimeout);
+        currentTypingTimeout = null;
     }
 
     try {
         const response = await fetch(API_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            // THÊM SESSION ID ĐỂ BACKEND NHỚ LỊCH SỬ CHAT
             body: JSON.stringify({
-                message: userMessage,
+                message: message,
                 sessionID: currentSessionID,
             }),
-            signal: AbortSignal.timeout(60000),
+            signal: signal,
         });
 
-        // ✅ XÓA thông báo chờ khi đã có phản hồi
-        document.querySelector(".warming-notice")?.remove();
-
-        if (!response.ok) throw new Error("Lỗi kết nối đến máy chủ backend.");
-
         const data = await response.json();
-        const botMessage = data.reply;
 
-        addMessageToChat("bot", botMessage, true);
+        // Lưu tin nhắn của AI vào session
         sessions[currentSessionID].messages.push({
             sender: "bot",
-            text: botMessage,
+            text: data.reply,
         });
 
-        // ✅ Tự động lưu session vào sidebar ngay sau lần bot trả lời đầu tiên
-        const isFirstBotReply =
-            sessions[currentSessionID].messages.filter(
-                (m) => m.sender === "bot",
-            ).length === 1;
-        if (isFirstBotReply) {
-            addSessionToHistoryUI(
-                currentSessionID,
-                sessions[currentSessionID].title,
-            );
+        // Tắt indicator
+        if (typeof hideThinkingIndicator === "function")
+            hideThinkingIndicator();
+        document
+            .querySelectorAll(".typing-indicator")
+            .forEach((el) => el.remove());
+
+        // Hiển thị tin nhắn chính
+        addMessageToChat("bot", data.reply, true);
+
+        // SAU KHI AI ĐÃ TRẢ LỜI XONG, BÂY GIỜ MỚI GỌI API ĐỂ LẤY TITLE
+        if (wasFirstMessage) {
+            generateAITitle(message, currentSessionID);
         }
     } catch (error) {
-        // ✅ XÓA thông báo chờ nếu lỗi
-        document.querySelector(".warming-notice")?.remove();
+        if (error.name === "AbortError") {
+            console.log("Đã hủy request cũ do người dùng chuyển session.");
+        } else {
+            console.error("Lỗi khi gọi AI:", error);
+            if (typeof hideThinkingIndicator === "function")
+                hideThinkingIndicator();
+            document
+                .querySelectorAll(".typing-indicator")
+                .forEach((el) => el.remove());
+            addMessageToChat("bot", "Xin lỗi, đã có lỗi kết nối xảy ra.");
 
-        console.error("Lỗi:", error);
-        const errMsg =
-            error.name === "TimeoutError"
-                ? "Máy chủ đang khởi động (cold start), vui lòng gửi lại sau 30 giây."
-                : "Xin lỗi, tôi đang gặp sự cố. Vui lòng thử lại sau.";
-        addMessageToChat("bot", errMsg);
-        userInput.disabled = false;
-        sendBtn.disabled = false;
-        newChatBtn.disabled = false;
-        newChatBtn.classList.remove("opacity-50", "pointer-events-none");
-        userInput.focus();
+            // Mở khóa UI do lỗi
+            userInput.disabled = false;
+            sendBtn.disabled = false;
+        }
     }
 }
 
-// Hàm gửi API ngầm để lấy tiêu đề
-async function generateAITitle(firstMessage) {
-    try {
-        // Dùng 1 session_id khác để không làm rác lịch sử chat chính
-        const titleSession = "title-gen-" + currentSessionID;
-        const prompt = `Đọc câu sau và đặt 1 tiêu đề thật ngắn gọn (tối đa 5 chữ) tóm tắt nội dung. Chỉ trả về đúng dòng tiêu đề, không giải thích, không dùng ngoặc kép: "${firstMessage}"`;
-
-        const response = await fetch(API_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ message: prompt, sessionID: titleSession }),
-        });
-
-        const data = await response.json();
-        let aiTitle = data.reply.trim().replace(/^["']|["']$/g, ""); // Bỏ ngoặc kép nếu AI cố tình trả về
-
-        // Cập nhật lại tên session
-        currentTitle = aiTitle;
-        sessions[currentSessionID].title = currentTitle;
-
-        // Cập nhật tên nút trong sidebar (nếu đã có)
-        const histBtn = document.getElementById(`hist-${currentSessionID}`);
-        if (histBtn) {
-            histBtn.querySelector(".hist-title")
-                ? (histBtn.querySelector(".hist-title").textContent =
-                      currentTitle)
-                : (histBtn.textContent = currentTitle);
-        }
-    } catch (error) {
-        // Fallback: Lấy 20 ký tự đầu nếu API lỗi
-        currentTitle = firstMessage.substring(0, 20) + "...";
-        sessions[currentSessionID].title = currentTitle;
+// --- HÀM LOAD LỊCH SỬ CHAT ---
+function loadChatHistory(sessionId) {
+    // 1. Hủy ngay lập tức API đang gọi dở dang
+    if (currentAbortController) {
+        currentAbortController.abort();
+        currentAbortController = null;
     }
-}
 
-// --- XỬ LÝ KHI NHẤN NÚT "+ ĐOẠN CHAT MỚI" ---
-newChatBtn.addEventListener("click", () => {
-    // Chỉ lưu vào lịch sử nếu phiên hiện tại CÓ tin nhắn
+    // 2. ÉP BUỘC HỦY hiệu ứng gõ chữ ngầm (Tránh Memory Leak & giật UI)
+    if (currentTypingTimeout) {
+        clearTimeout(currentTypingTimeout);
+        currentTypingTimeout = null;
+    }
+
+    // 3. ÉP BUỘC TẮT thanh "AI đang suy nghĩ"
+    if (typeof hideThinkingIndicator === "function") hideThinkingIndicator();
+    document
+        .querySelectorAll(".typing-indicator, #thinking-indicator")
+        .forEach((el) => el.remove());
+
+    // 4. ÉP BUỘC MỞ KHÓA ô chat và nút Gửi
+    userInput.disabled = false;
+    sendBtn.disabled = false;
+    newChatBtn.disabled = false;
+    newChatBtn.classList.remove("opacity-50", "pointer-events-none");
+
+    // 5. Nếu người dùng đang nhắn dở đoạn chat hiện tại mà chưa lưu, thì lưu tạm vào UI
     if (
+        currentSessionID !== sessionId &&
         sessions[currentSessionID] &&
         sessions[currentSessionID].messages.length > 0
     ) {
@@ -203,15 +201,12 @@ newChatBtn.addEventListener("click", () => {
         );
     }
 
-    // Reset mọi thứ về ban đầu
-    currentSessionID = generateSessionID();
-    currentTitle = "Đoạn chat mới";
-    isFirstMessage = true;
+    // 6. Chuyển đổi ID và Title
+    currentSessionID = sessionId;
+    currentTitle = sessions[sessionId].title;
+    isFirstMessage = false;
 
-    // Xóa giao diện khung chat hiện tại
-    chatMessages.innerHTML = "";
-
-    // Gỡ highlight của tất cả nút trong lịch sử
+    // 7. Highlight nút active ở Sidebar
     document
         .querySelectorAll(".history-item")
         .forEach((b) =>
@@ -224,46 +219,9 @@ newChatBtn.addEventListener("click", () => {
                 "font-medium",
             ),
         );
-
-    addMessageToChat(
-        "bot",
-        "Đã bắt đầu đoạn chat mới. Tôi có thể giúp gì cho bạn?",
-    );
-});
-
-// Hàm gắn nút lịch sử mới vào Sidebar
-function addSessionToHistoryUI(id, title) {
-    // Ngăn chặn tạo trùng nút
-    if (document.getElementById(`hist-${id}`)) return;
-
-    const btn = document.createElement("button");
-    btn.id = `hist-${id}`;
-    btn.className =
-        "history-item w-full text-left px-3 py-2 rounded-lg text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700/50 truncate transition-all duration-200 flex items-center gap-2";
-
-    // Icon cuộc hội thoại
-    btn.innerHTML = `
-        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 shrink-0 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-        </svg>
-        <span class="hist-title truncate">${title}</span>
-    `;
-
-    // Highlight nút active
-    const setActive = () => {
-        document
-            .querySelectorAll(".history-item")
-            .forEach((b) =>
-                b.classList.remove(
-                    "bg-gray-200",
-                    "dark:bg-gray-700/50",
-                    "ring-1",
-                    "ring-gray-300",
-                    "dark:ring-gray-600",
-                    "font-medium",
-                ),
-            );
-        btn.classList.add(
+    const activeBtn = document.getElementById(`hist-${sessionId}`);
+    if (activeBtn) {
+        activeBtn.classList.add(
             "bg-gray-200",
             "dark:bg-gray-700/50",
             "ring-1",
@@ -271,38 +229,47 @@ function addSessionToHistoryUI(id, title) {
             "dark:ring-gray-600",
             "font-medium",
         );
-    };
+    }
 
-    btn.addEventListener("click", () => {
-        setActive();
-
-        // Nếu người dùng đang nhắn dở đoạn chat hiện tại mà chưa lưu, thì lưu tạm vào UI
-        if (
-            currentSessionID !== id &&
-            sessions[currentSessionID] &&
-            sessions[currentSessionID].messages.length > 0
-        ) {
-            addSessionToHistoryUI(
-                currentSessionID,
-                sessions[currentSessionID].title,
-            );
-        }
-
-        // Khôi phục trạng thái sang đoạn chat cũ
-        currentSessionID = id;
-        currentTitle = sessions[id].title;
-        isFirstMessage = false;
-
-        // Vẽ lại toàn bộ tin nhắn cũ
-        chatMessages.innerHTML = "";
-        sessions[id].messages.forEach((msg) => {
-            addMessageToChat(msg.sender, msg.text, false);
-        });
+    // 8. Xóa khung chat cũ và vẽ lại toàn bộ tin nhắn (không hiệu ứng gõ máy)
+    chatMessages.innerHTML = "";
+    sessions[sessionId].messages.forEach((msg) => {
+        addMessageToChat(msg.sender, msg.text, false);
     });
 
-    historyList.prepend(btn); // Đẩy lên trên cùng của danh sách
+    // Đẩy thanh cuộn xuống cuối
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
 
-    // Highlight ngay nếu đây là session đang active
+// --- HÀM GẮN NÚT LỊCH SỬ LÊN SIDEBAR ---
+function addSessionToHistoryUI(id, title) {
+    if (document.getElementById(`hist-${id}`)) {
+        // Cập nhật lại title nếu nút đã tồn tại
+        const existingBtn = document.getElementById(`hist-${id}`);
+        if (existingBtn.querySelector(".hist-title")) {
+            existingBtn.querySelector(".hist-title").textContent = title;
+        }
+        return;
+    }
+
+    const btn = document.createElement("button");
+    btn.id = `hist-${id}`;
+    btn.className =
+        "history-item w-full text-left px-3 py-2 rounded-lg text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700/50 truncate transition-all duration-200 flex items-center gap-2";
+
+    btn.innerHTML = `
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 shrink-0 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+        </svg>
+        <span class="hist-title truncate">${title}</span>
+    `;
+
+    btn.addEventListener("click", () => {
+        loadChatHistory(id);
+    });
+
+    historyList.prepend(btn);
+
     if (id === currentSessionID) {
         document
             .querySelectorAll(".history-item")
@@ -327,7 +294,105 @@ function addSessionToHistoryUI(id, title) {
     }
 }
 
-// Hàm render UI tin nhắn (Đã fix lỗi gõ Markdown)
+// --- XỬ LÝ KHI NHẤN NÚT "+ ĐOẠN CHAT MỚI" ---
+newChatBtn.addEventListener("click", () => {
+    if (
+        sessions[currentSessionID] &&
+        sessions[currentSessionID].messages.length > 0
+    ) {
+        addSessionToHistoryUI(
+            currentSessionID,
+            sessions[currentSessionID].title,
+        );
+    }
+
+    // Reset data
+    currentSessionID = generateSessionID();
+    currentTitle = "Đoạn chat mới";
+    isFirstMessage = true;
+    sessions[currentSessionID] = { title: currentTitle, messages: [] };
+
+    // Hủy request cũ, hủy hiệu ứng gõ chữ, reset UI
+    if (currentAbortController) {
+        currentAbortController.abort();
+        currentAbortController = null;
+    }
+    if (currentTypingTimeout) {
+        clearTimeout(currentTypingTimeout);
+        currentTypingTimeout = null;
+    }
+
+    if (typeof hideThinkingIndicator === "function") hideThinkingIndicator();
+    document
+        .querySelectorAll(".typing-indicator, #thinking-indicator")
+        .forEach((el) => el.remove());
+
+    userInput.disabled = false;
+    sendBtn.disabled = false;
+
+    // Reset Giao diện
+    chatMessages.innerHTML = "";
+    document
+        .querySelectorAll(".history-item")
+        .forEach((b) =>
+            b.classList.remove(
+                "bg-gray-200",
+                "dark:bg-gray-700/50",
+                "ring-1",
+                "ring-gray-300",
+                "dark:ring-gray-600",
+                "font-medium",
+            ),
+        );
+
+    addMessageToChat(
+        "bot",
+        "Đã bắt đầu đoạn chat mới. Tôi có thể giúp gì cho bạn?",
+    );
+});
+
+// --- TẠO TITLE CHO ĐOẠN CHAT (ĐÃ FIX RACE CONDITION) ---
+async function generateAITitle(firstMessage, targetSessionID) {
+    try {
+        const titleSession = "title-gen-" + targetSessionID;
+        const prompt = `Đọc câu sau và đặt 1 tiêu đề thật ngắn gọn (tối đa 5 chữ) tóm tắt nội dung. Chỉ trả về đúng dòng tiêu đề, không giải thích, không dùng ngoặc kép: "${firstMessage}"`;
+
+        const response = await fetch(API_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: prompt, sessionID: titleSession }),
+        });
+
+        const data = await response.json();
+        let aiTitle = data.reply.trim().replace(/^["']|["']$/g, "");
+
+        // Chỉ cập nhật dữ liệu của đúng session được yêu cầu
+        if (sessions[targetSessionID]) {
+            sessions[targetSessionID].title = aiTitle;
+
+            // Nếu người dùng VẪN đang ở đoạn chat này, thì cập nhật biến hiện tại
+            if (currentSessionID === targetSessionID) {
+                currentTitle = aiTitle;
+            }
+        }
+
+        // Cập nhật DOM trên thanh sidebar
+        const histBtn = document.getElementById(`hist-${targetSessionID}`);
+        if (histBtn) {
+            const titleSpan = histBtn.querySelector(".hist-title");
+            if (titleSpan) titleSpan.textContent = aiTitle;
+        }
+    } catch (error) {
+        let fallbackTitle = firstMessage.substring(0, 20) + "...";
+        if (sessions[targetSessionID]) {
+            sessions[targetSessionID].title = fallbackTitle;
+            if (currentSessionID === targetSessionID)
+                currentTitle = fallbackTitle;
+        }
+    }
+}
+
+// --- HÀM RENDER TIN NHẮN ---
 function addMessageToChat(sender, message, isTyping = false) {
     const messageElement = document.createElement("div");
     messageElement.classList.add("message", sender, "new-message");
@@ -341,6 +406,7 @@ function addMessageToChat(sender, message, isTyping = false) {
         messageElement.textContent = "";
 
         function typeWriter() {
+            // Kiểm tra xem user có đang ở cuối thanh cuộn không
             const isNearBottom =
                 chatMessages.scrollHeight - chatMessages.clientHeight <=
                 chatMessages.scrollTop + 10;
@@ -350,11 +416,16 @@ function addMessageToChat(sender, message, isTyping = false) {
                 i++;
                 if (isNearBottom)
                     chatMessages.scrollTop = chatMessages.scrollHeight;
-                setTimeout(typeWriter, speed);
+
+                // Lưu tham chiếu timeout để có thể ngắt nếu người dùng chuyển tab
+                currentTypingTimeout = setTimeout(typeWriter, speed);
             } else {
+                // Kết thúc gõ phím -> parse Markdown và NHẢ KHÓA
                 messageElement.innerHTML = marked.parse(message);
                 if (isNearBottom)
                     chatMessages.scrollTop = chatMessages.scrollHeight;
+
+                currentTypingTimeout = null; // Xóa tham chiếu
                 userInput.disabled = false;
                 sendBtn.disabled = false;
                 newChatBtn.disabled = false;
@@ -376,30 +447,3 @@ function addMessageToChat(sender, message, isTyping = false) {
         chatMessages.scrollTop = chatMessages.scrollHeight;
     }
 }
-
-// ### Minh họa quy trình hoạt động (ASCII):
-
-// Bạn hãy xem sơ đồ nhỏ này để hiểu tư duy phân luồng (Async/Await) của tính năng chúng ta vừa làm nhé:
-
-// ```text
-//        [Người dùng gửi tin nhắn đầu tiên]
-//                     |
-//            +--------+--------+ (Tách ra 2 luồng độc lập)
-//            |                 |
-//   [Trả lời câu hỏi]  [Gửi API ngầm lấy Title]
-//            |                 |
-//     Bot đang gõ...   Nhận Title: "Hàm VLOOKUP"
-//            |                 |
-//            +--------+--------+
-//                     |
-//       [Nhấn Nút: "+ Đoạn chat mới"]
-//                     |
-//   +-------------------------------------+
-//   | Lấy Title "Hàm VLOOKUP"             |
-//   | Lấy toàn bộ Array mảng tin nhắn     |
-//   | -> Nhét lên Sidebar làm nút lịch sử |
-//   +-------------------------------------+
-//                     |
-//            [Tạo khung chat Rỗng]
-
-// Với cấu trúc trên, bạn có thể nhảy qua nhảy lại giữa các cuộc hội thoại cũ một cách hoàn hảo mà không hề bị làm rác file log ở Backend! Quí hãy dán vào và F5 trải nghiệm thử xem. Nếu cần tinh chỉnh thêm bất kì hiệu ứng chuyển động nào để giao diện "ảo diệu" hơn, cứ bảo mình nhé! Mọi cố gắng của Quí chắc chắn sẽ tạo ra một đồ án tuyệt đẹp!
