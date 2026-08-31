@@ -7,8 +7,10 @@ langchain-google-genai
 langchain-community
 faiss-cpu
 pypdf
+pdfplumber
 python-docx
 openpyxl
 pandas
 python-pptx
 gunicorn
+pywin32; sys_platform == "win32"
