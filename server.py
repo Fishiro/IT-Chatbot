@@ -56,15 +56,27 @@ config = types.GenerateContentConfig(
 )
 
 # ============================================================
-# FIX DEPLOY: Load FAISS trong background thread
-# → Flask bind port ngay lập tức, Render không bị timeout
-# → Các request đầu tiên dùng kiến thức nền Gemini (retriever=None)
-# → Sau ~30-60s FAISS sẵn sàng, các request sau dùng RAG đầy đủ
+# NẠP VECTOR DB (FAISS) TRONG BACKGROUND THREAD
+# → Flask bind port ngay lập tức, Render không bị timeout khi deploy
+# → Request đến TRONG lúc đang nạp sẽ CHỜ (tối đa RAG_MAX_WAIT_SECONDS)
+#   thay vì âm thầm bỏ qua RAG như trước — tránh trả lời "ngoài lề"
+#   chỉ vì tới sớm sau khi server vừa cold-start (Render free hay sleep).
+# → vectorstore chỉ tốn RAM (~35MB), không tốn CPU liên tục → nhẹ,
+#   phù hợp free tier.
 # ============================================================
 retriever = None
+vectorstore_ready = threading.Event()   # set() khi nạp XONG (thành công hay thất bại)
+vectorstore_error = None
+
+RAG_MAX_WAIT_SECONDS = float(os.getenv("RAG_MAX_WAIT_SECONDS", "55"))
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", "4"))
+RAG_MIN_RELEVANCE = float(os.getenv("RAG_MIN_RELEVANCE", "0.55"))  # 0..1, càng cao càng chặt
+MAX_ACTIVE_SESSIONS = int(os.getenv("MAX_ACTIVE_SESSIONS", "200"))
+DEBUG_RAG = os.getenv("DEBUG_RAG", "0") == "1"
+
 
 def load_vectorstore():
-    global retriever
+    global retriever, vectorstore_error
     print("🔄 [Background] Đang nạp Vector DB (faiss_index)...")
     try:
         embeddings = GoogleGenerativeAIEmbeddings(
@@ -74,23 +86,77 @@ def load_vectorstore():
         vectorstore = FAISS.load_local(
             "faiss_index", embeddings, allow_dangerous_deserialization=True
         )
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+        retriever = vectorstore
         print("✅ [Background] Đã nạp thành công bộ não AI!")
     except Exception as e:
+        vectorstore_error = str(e)
         print(f"❌ [Background] Không tìm thấy hoặc lỗi nạp Vector DB: {e}")
         retriever = None
+    finally:
+        # Luôn set, kể cả khi lỗi — để các request đang chờ không bị treo mãi
+        vectorstore_ready.set()
+
 
 # Khởi động thread ngay khi app load — không block Flask
 threading.Thread(target=load_vectorstore, daemon=True).start()
 
 # ============================================================
 
+
+def get_relevant_context(user_message: str):
+    """
+    Truy vấn FAISS, LỌC theo độ liên quan (relevance score) để loại bỏ
+    những đoạn "gần nhất nhưng không thực sự liên quan" — nguyên nhân
+    chính khiến model trả lời lạc đề dù đã có RAG.
+    Trả về (context_text, has_relevant_docs, sources).
+    """
+    try:
+        # similarity_search_with_relevance_scores trả score đã chuẩn hoá 0..1
+        # (1 = liên quan nhất). An toàn hơn dùng score L2 thô.
+        results = retriever.similarity_search_with_relevance_scores(
+            user_message, k=RAG_TOP_K
+        )
+    except Exception as e:
+        # Lỗi gọi embedding API (vd rate limit) không được làm sập cả request
+        # -> chỉ bỏ qua RAG cho riêng câu hỏi này, không crash.
+        print(f"⚠️ [RAG] Lỗi truy vấn vector DB, bỏ qua RAG cho câu này: {e}")
+        return "", False, []
+
+    good_docs = [(doc, score) for doc, score in results if score >= RAG_MIN_RELEVANCE]
+
+    if DEBUG_RAG:
+        print(f"🔎 [RAG] Câu hỏi: {user_message!r}")
+        for doc, score in results:
+            mark = "✅" if score >= RAG_MIN_RELEVANCE else "  "
+            src = doc.metadata.get("source", "Không rõ")
+            print(f"   {mark} score={score:.3f} src={src}")
+
+    if not good_docs:
+        return "", False, []
+
+    context = "\n\n".join([
+        f"- Nội dung: {doc.page_content}\n(Nguồn: {doc.metadata.get('source', 'Không rõ')})"
+        for doc, _ in good_docs
+    ])
+    sources = [doc.metadata.get("source", "Không rõ") for doc, _ in good_docs]
+    return context, True, sources
+
+
 # FIX PING: Hỗ trợ cả GET lẫn HEAD (UptimeRobot dùng HEAD)
 @app.route("/health", methods=["GET", "HEAD"])
 def health():
-    return jsonify({"status": "ok", "vectordb": retriever is not None}), 200
+    return jsonify({
+        "status": "ok",
+        "vectordb_ready": vectorstore_ready.is_set(),
+        "vectordb_loaded": retriever is not None,
+        "vectordb_error": vectorstore_error,
+        "active_sessions": len(active_sessions),
+    }), 200
+
 
 active_sessions = {}
+session_order = []  # FIFO để giới hạn RAM trên free tier
+
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
@@ -102,6 +168,11 @@ def chat():
         if not user_message or not session_id:
             return jsonify({"error": "Thiếu dữ liệu."}), 400
 
+        # --- Giới hạn số session giữ trong RAM (free tier ~512MB) ---
+        if session_id not in active_sessions and len(active_sessions) >= MAX_ACTIVE_SESSIONS:
+            oldest = session_order.pop(0)
+            active_sessions.pop(oldest, None)
+
         if session_id in active_sessions:
             chat_session = active_sessions[session_id]
         else:
@@ -111,20 +182,39 @@ def chat():
                 config=config
             )
             active_sessions[session_id] = chat_session
+            session_order.append(session_id)
+
+        # --- Chờ Vector DB nạp xong (chỉ chờ ở những request đến sớm
+        #     ngay sau cold-start; các request sau đó gần như tức thì) ---
+        if not vectorstore_ready.is_set():
+            vectorstore_ready.wait(timeout=RAG_MAX_WAIT_SECONDS)
 
         # --- Tích hợp RAG nếu Vector DB đã sẵn sàng ---
         if retriever:
-            docs = retriever.invoke(user_message)
-            context = "\n\n".join([
-                f"- Nội dung: {doc.page_content} \n(Nguồn: {doc.metadata.get('source', 'Không rõ')})"
-                for doc in docs
-            ])
-            augmented_message = f"[Tài liệu tham khảo]:\n{context}\n\n[Câu hỏi của tôi]: {user_message}"
+            context, has_relevant, sources = get_relevant_context(user_message)
+            if has_relevant:
+                augmented_message = (
+                    f"[Tài liệu tham khảo]:\n{context}\n\n"
+                    f"[Câu hỏi của tôi]: {user_message}"
+                )
+            else:
+                # Nói RÕ với model là không tìm thấy tài liệu liên quan,
+                # để nó tuân theo QUY TẮC 2 (từ chối / dùng kiến thức nền
+                # một cách có ý thức) thay vì âm thầm trộn lẫn.
+                augmented_message = (
+                    "[Tài liệu tham khảo]: (không tìm thấy đoạn nào đủ liên quan "
+                    "trong giáo trình đã nạp)\n\n"
+                    f"[Câu hỏi của tôi]: {user_message}"
+                )
         else:
             augmented_message = user_message
+            sources = []
 
         response = chat_session.send_message(augmented_message)
-        return jsonify({"reply": response.text})
+        result = {"reply": response.text}
+        if DEBUG_RAG:
+            result["_debug_sources"] = sources
+        return jsonify(result)
 
     except Exception as e:
         import traceback
