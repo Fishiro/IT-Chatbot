@@ -402,7 +402,7 @@ function addMessageToChat(sender, message, isTyping = false) {
         chatMessages.scrollTop = chatMessages.scrollHeight;
 
         let i = 0;
-        const speed = 20;
+        const speed = 8;
         messageElement.textContent = "";
 
         function typeWriter() {
