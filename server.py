@@ -265,7 +265,7 @@ def chat():
         else:
             chat_session = client.chats.create(
                 # FIX QUOTA: gemini-2.0-flash có 1500 req/ngày thay vì 20
-                model="gemini-2.5-flash",
+                model="gemini-2.5-flash-lite",
                 config=config
             )
             active_sessions[session_id] = chat_session
