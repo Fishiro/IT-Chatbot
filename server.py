@@ -72,7 +72,7 @@ system_instruction = (
 )
 
 config = types.GenerateContentConfig(
-    max_output_tokens=2048,
+    max_output_tokens=500,
     system_instruction=system_instruction
 )
 
@@ -90,7 +90,7 @@ vectorstore_ready = threading.Event()   # set() khi nạp XONG (thành công hay
 vectorstore_error = None
 
 RAG_MAX_WAIT_SECONDS = float(os.getenv("RAG_MAX_WAIT_SECONDS", "55"))
-RAG_TOP_K = int(os.getenv("RAG_TOP_K", "4"))
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", "3"))
 RAG_MIN_RELEVANCE = float(os.getenv("RAG_MIN_RELEVANCE", "0.55"))  # 0..1, càng cao càng chặt
 MAX_ACTIVE_SESSIONS = int(os.getenv("MAX_ACTIVE_SESSIONS", "200"))
 DEBUG_RAG = os.getenv("DEBUG_RAG", "0") == "1"
