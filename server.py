@@ -1,7 +1,11 @@
 import os
 import threading
+import requests
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from werkzeug.middleware.proxy_fix import ProxyFix
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
@@ -14,6 +18,13 @@ from langchain_community.vectorstores import FAISS
 load_dotenv()
 
 app = Flask(__name__)
+
+# --- BẢO MẬT: Cần thiết khi deploy sau reverse proxy (Render, v.v.)
+#     để Flask/Limiter nhận đúng IP thật của client (X-Forwarded-For)
+#     thay vì luôn thấy IP nội bộ của proxy. Nếu thiếu dòng này,
+#     rate limit theo IP sẽ KHÔNG hoạt động đúng trên Render. ---
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
 CORS(app, origins=[
     "https://giasutinhoccanban.tech",
     "https://it-chatbot.vercel.app",
@@ -21,6 +32,16 @@ CORS(app, origins=[
     "http://localhost:5000",
     "http://localhost:5500",
 ])
+
+# --- BẢO MẬT: Giới hạn request/IP để chống spam & bòn rút quota Gemini.
+#     Đây là lớp chặn quan trọng nhất vì Flask có thể bị gọi trực tiếp
+#     (curl/Postman) bỏ qua hoàn toàn giao diện web hay Node gateway. ---
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=[],  # không áp mặc định toàn site, chỉ áp cho route cụ thể bên dưới
+    storage_uri="memory://",  # đủ dùng cho 1 instance free-tier; không cần Redis
+)
 
 # --- Phục vụ Frontend tĩnh (dùng khi deploy trực tiếp Python, không qua Node gateway) ---
 @app.route("/", defaults={"path": ""})
@@ -158,15 +179,81 @@ active_sessions = {}
 session_order = []  # FIFO để giới hạn RAM trên free tier
 
 
+MAX_MESSAGE_LENGTH = int(os.getenv("MAX_MESSAGE_LENGTH", "2000"))
+
+# --- BẢO MẬT: reCAPTCHA v3 — xác minh "vô hình" ---
+# Không hiện bất kỳ ô/tuỳ chọn nào cho người dùng. Frontend gọi
+# grecaptcha.execute(...) trong lúc gõ để lấy token, gửi kèm request.
+# Ở đây backend gọi Google để đổi token lấy điểm tin cậy (0.0 - 1.0),
+# điểm càng cao càng chắc là người thật. Đây là lớp chặn tool tự động
+# gọi thẳng vào /api/chat (curl/Postman/script) mà KHÔNG chạy qua trình
+# duyệt thật — vì những công cụ đó không thể tạo ra token hợp lệ.
+RECAPTCHA_SECRET_KEY = os.getenv("RECAPTCHA_SECRET_KEY")
+RECAPTCHA_MIN_SCORE = float(os.getenv("RECAPTCHA_MIN_SCORE", "0.5"))
+RECAPTCHA_EXPECTED_ACTION = "chat"
+
+
+def verify_captcha(token, remote_ip=None):
+    """
+    Trả True nếu request được coi là hợp lệ (cho phép đi tiếp).
+    - Nếu chưa cấu hình RECAPTCHA_SECRET_KEY (vd đang chạy local dev)
+      → bỏ qua việc kiểm tra, không chặn nhầm.
+    - Nếu Google API lỗi tạm thời (mạng, timeout) → fail-open (cho qua),
+      vì đây chỉ là 1 lớp phòng thủ bổ sung bên cạnh rate-limit, không
+      phải lớp duy nhất — tránh chặn nhầm người dùng thật khi Google sập.
+    """
+    if not RECAPTCHA_SECRET_KEY:
+        return True
+    if not token:
+        return False
+    try:
+        resp = requests.post(
+            "https://www.google.com/recaptcha/api/siteverify",
+            data={
+                "secret": RECAPTCHA_SECRET_KEY,
+                "response": token,
+                "remoteip": remote_ip,
+            },
+            timeout=5,
+        )
+        result = resp.json()
+        return (
+            result.get("success") is True
+            and result.get("score", 0) >= RECAPTCHA_MIN_SCORE
+            and result.get("action") == RECAPTCHA_EXPECTED_ACTION
+        )
+    except Exception as e:
+        print(f"⚠️ [reCAPTCHA] Lỗi xác minh (fail-open, cho qua): {e}")
+        return True
+
+
 @app.route("/api/chat", methods=["POST"])
+# --- BẢO MẬT: Giới hạn 15 request/phút/IP. Đây là lớp chặn quan trọng
+#     nhất vì route này có thể bị gọi trực tiếp (curl/Postman/DevTools)
+#     bỏ qua hoàn toàn giao diện web hay Node gateway phía trước. ---
+@limiter.limit("15 per minute")
 def chat():
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
         user_message = data.get("message")
         session_id = data.get("sessionID")
+        captcha_token = data.get("captchaToken")
 
         if not user_message or not session_id:
             return jsonify({"error": "Thiếu dữ liệu."}), 400
+
+        if not isinstance(user_message, str) or len(user_message) > MAX_MESSAGE_LENGTH:
+            return jsonify({
+                "error": f"Tin nhắn quá dài (tối đa {MAX_MESSAGE_LENGTH} ký tự)."
+            }), 400
+        if not isinstance(session_id, str) or len(session_id) > 100:
+            return jsonify({"error": "sessionID không hợp lệ."}), 400
+
+        # --- BẢO MẬT: Xác minh captcha vô hình TRƯỚC khi tốn quota Gemini ---
+        if not verify_captcha(captcha_token, request.remote_addr):
+            return jsonify({
+                "error": "Xác minh bảo mật thất bại. Vui lòng tải lại trang và thử lại."
+            }), 403
 
         # --- Giới hạn số session giữ trong RAM (free tier ~512MB) ---
         if session_id not in active_sessions and len(active_sessions) >= MAX_ACTIVE_SESSIONS:
@@ -216,11 +303,23 @@ def chat():
             result["_debug_sources"] = sources
         return jsonify(result)
 
-    except Exception as e:
+    except Exception:
         import traceback
-        print("--- LỖI CHI TIẾT TỪ SERVER ---")
+        # --- BẢO MẬT: In chi tiết lỗi ra LOG SERVER (Render logs), KHÔNG
+        #     trả str(e) thô ra client — tránh lộ đường dẫn nội bộ, tên
+        #     thư viện, hoặc chi tiết hệ thống cho người dò lỗi từ bên ngoài.
+        print("--- LỖI CHI TIẾT TỪ SERVER (chỉ hiện trong log) ---")
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "error": "Có lỗi xảy ra khi xử lý yêu cầu. Vui lòng thử lại sau."
+        }), 500
+
+
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    return jsonify({
+        "error": "Bạn gửi tin nhắn quá nhanh. Vui lòng chờ một chút rồi thử lại."
+    }), 429
 
 
 def get_local_ip():
