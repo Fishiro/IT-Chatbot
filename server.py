@@ -51,15 +51,21 @@ def serve_frontend(path):
         return send_from_directory("public", path)
     return send_from_directory("public", "index.html")
 
-# --- Cấu hình Gemini ---
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_API_KEY_1 = os.getenv("GEMINI_API_KEY_1")
-GEMINI_API_KEY_2 = os.getenv("GEMINI_API_KEY_2")
+# --- Cấu hình Gemini (Hỗ trợ Fallback) ---
+api_keys_list = [
+    os.getenv("GEMINI_API_KEY_1"),
+    os.getenv("GEMINI_API_KEY_2") # Bạn có thể để sẵn, nếu rỗng code sẽ tự bỏ qua
+]
 
-if not GEMINI_API_KEY:
-    raise ValueError("Thiếu GEMINI_API_KEY. Hãy kiểm tra file .env của bạn.")
+# Lọc ra danh sách các key hợp lệ (không bị None hoặc chuỗi rỗng)
+VALID_API_KEYS = [k for k in api_keys_list if k]
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+if not VALID_API_KEYS:
+    raise ValueError("Không tìm thấy bất kỳ GEMINI_API_KEY nào. Hãy kiểm tra file .env!")
+
+# Khởi tạo sẵn các client tương ứng với từng key
+clients = [genai.Client(api_key=key) for key in VALID_API_KEYS]
+current_key_index = 0  # Biến toàn cục theo dõi key đang active
 
 # --- Prompt Hệ thống ---
 system_instruction = (
@@ -230,11 +236,9 @@ def verify_captcha(token, remote_ip=None):
 
 
 @app.route("/api/chat", methods=["POST"])
-# --- BẢO MẬT: Giới hạn 15 request/phút/IP. Đây là lớp chặn quan trọng
-#     nhất vì route này có thể bị gọi trực tiếp (curl/Postman/DevTools)
-#     bỏ qua hoàn toàn giao diện web hay Node gateway phía trước. ---
 @limiter.limit("15 per minute")
 def chat():
+    global current_key_index # Khai báo để có thể thay đổi key đang dùng
     try:
         data = request.get_json(silent=True) or {}
         user_message = data.get("message")
@@ -251,33 +255,21 @@ def chat():
         if not isinstance(session_id, str) or len(session_id) > 100:
             return jsonify({"error": "sessionID không hợp lệ."}), 400
 
-        # --- BẢO MẬT: Xác minh captcha vô hình TRƯỚC khi tốn quota Gemini ---
         if not verify_captcha(captcha_token, request.remote_addr):
             return jsonify({
                 "error": "Xác minh bảo mật thất bại. Vui lòng tải lại trang và thử lại."
             }), 403
 
-        # --- Giới hạn số session giữ trong RAM (free tier ~512MB) ---
+        # --- Giới hạn số session giữ trong RAM ---
         if session_id not in active_sessions and len(active_sessions) >= MAX_ACTIVE_SESSIONS:
             oldest = session_order.pop(0)
             active_sessions.pop(oldest, None)
 
-        if session_id in active_sessions:
-            chat_session = active_sessions[session_id]
-        else:
-            chat_session = client.chats.create(
-                model="gemini-flash-lite-latest",
-                config=config
-            )
-            active_sessions[session_id] = chat_session
-            session_order.append(session_id)
-
-        # --- Chờ Vector DB nạp xong (chỉ chờ ở những request đến sớm
-        #     ngay sau cold-start; các request sau đó gần như tức thì) ---
+        # --- Chờ Vector DB ---
         if not vectorstore_ready.is_set():
             vectorstore_ready.wait(timeout=RAG_MAX_WAIT_SECONDS)
 
-        # --- Tích hợp RAG nếu Vector DB đã sẵn sàng ---
+        # --- Chuẩn bị RAG Context ---
         if retriever:
             context, has_relevant, sources = get_relevant_context(user_message)
             if has_relevant:
@@ -286,29 +278,81 @@ def chat():
                     f"[Câu hỏi của tôi]: {user_message}"
                 )
             else:
-                # Nói RÕ với model là không tìm thấy tài liệu liên quan,
-                # để nó tuân theo QUY TẮC 2 (từ chối / dùng kiến thức nền
-                # một cách có ý thức) thay vì âm thầm trộn lẫn.
                 augmented_message = (
-                    "[Tài liệu tham khảo]: (không tìm thấy đoạn nào đủ liên quan "
-                    "trong giáo trình đã nạp)\n\n"
+                    "[Tài liệu tham khảo]: (không tìm thấy đoạn nào đủ liên quan)\n\n"
                     f"[Câu hỏi của tôi]: {user_message}"
                 )
         else:
             augmented_message = user_message
             sources = []
 
-        response = chat_session.send_message(augmented_message)
-        result = {"reply": response.text}
-        if DEBUG_RAG:
-            result["_debug_sources"] = sources
-        return jsonify(result)
+        # ============================================================
+        # CƠ CHẾ FALLBACK VÒNG LẶP
+        # ============================================================
+        max_retries = len(VALID_API_KEYS)
+        
+        for attempt in range(max_retries):
+            try:
+                # 1. Lấy hoặc tạo session với client HIỆN TẠI
+                if session_id not in active_sessions:
+                    chat_session = clients[current_key_index].chats.create(
+                        model="gemini-flash-lite-latest",
+                        config=config
+                    )
+                    active_sessions[session_id] = chat_session
+                    session_order.append(session_id)
+                else:
+                    chat_session = active_sessions[session_id]
+
+                # 2. Gửi tin nhắn
+                response = chat_session.send_message(augmented_message)
+                
+                # 3. Thành công thì trả về ngay lập tức (thoát vòng lặp)
+                result = {"reply": response.text}
+                if DEBUG_RAG:
+                    result["_debug_sources"] = sources
+                return jsonify(result)
+
+            except Exception as e:
+                error_str = str(e).lower()
+                # Kiểm tra xem lỗi có phải do hết Quota (429 Resource Exhausted) không
+                if "429" in error_str or "quota" in error_str or "exhausted" in error_str:
+                    print(f"⚠️ [Fallback] Key index {current_key_index} bị giới hạn. Đang chuyển sang key tiếp theo...")
+                    
+                    # Chuyển sang key kế tiếp (quay vòng tròn nếu hết mảng)
+                    current_key_index = (current_key_index + 1) % len(VALID_API_KEYS)
+                    
+                    # BẢO TOÀN LỊCH SỬ CHAT: Chuyển lịch sử sang session thuộc Client/Key mới
+                    if session_id in active_sessions:
+                        try:
+                            # Lấy lịch sử cũ bằng hàm của SDK mới
+                            old_history = chat_session.get_history() 
+                            # Tạo session mới đè lên cái cũ
+                            active_sessions[session_id] = clients[current_key_index].chats.create(
+                                model="gemini-flash-lite-latest",
+                                config=config,
+                                history=old_history
+                            )
+                        except Exception as hist_err:
+                            print(f"⚠️ [Fallback] Không thể copy lịch sử: {hist_err}")
+                            # Nếu copy lịch sử lỗi, xóa session để nó tạo mới hoàn toàn ở vòng lặp sau
+                            active_sessions.pop(session_id, None) 
+                            if session_id in session_order:
+                                session_order.remove(session_id)
+                    
+                    # Tiếp tục vòng lặp for để thử lại với attempt mới
+                    continue 
+                else:
+                    # Nếu là lỗi khác (như mạng rớt, model sập, lỗi code), ném ra để xử lý lỗi 500
+                    raise e
+                    
+        # Nếu thoát khỏi vòng lặp mà vẫn chưa return, nghĩa là tất cả các key đều đã kiệt quệ
+        return jsonify({
+            "error": "Tất cả máy chủ AI đều đang quá tải (Hết hạn mức). Vui lòng quay lại vào ngày mai!"
+        }), 503
 
     except Exception:
         import traceback
-        # --- BẢO MẬT: In chi tiết lỗi ra LOG SERVER (Render logs), KHÔNG
-        #     trả str(e) thô ra client — tránh lộ đường dẫn nội bộ, tên
-        #     thư viện, hoặc chi tiết hệ thống cho người dò lỗi từ bên ngoài.
         print("--- LỖI CHI TIẾT TỪ SERVER (chỉ hiện trong log) ---")
         traceback.print_exc()
         return jsonify({
