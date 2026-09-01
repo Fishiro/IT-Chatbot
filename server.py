@@ -110,7 +110,7 @@ def load_vectorstore():
     try:
         embeddings = GoogleGenerativeAIEmbeddings(
             model="models/gemini-embedding-001",
-            google_api_key=GEMINI_API_KEY
+            google_api_key=VALID_API_KEYS[0] 
         )
         vectorstore = FAISS.load_local(
             "faiss_index", embeddings, allow_dangerous_deserialization=True
