@@ -53,6 +53,9 @@ def serve_frontend(path):
 
 # --- Cấu hình Gemini ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY_1 = os.getenv("GEMINI_API_KEY_1")
+GEMINI_API_KEY_2 = os.getenv("GEMINI_API_KEY_2")
+
 if not GEMINI_API_KEY:
     raise ValueError("Thiếu GEMINI_API_KEY. Hãy kiểm tra file .env của bạn.")
 
@@ -60,19 +63,18 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 # --- Prompt Hệ thống ---
 system_instruction = (
-    "Bạn là 'Gia sư số Tin học căn bản theo Thông tư số 11/2018/TT-BLĐTBXH'. "
-    "Nhiệm vụ của bạn là giải thích các khái niệm tin học cơ bản, hướng dẫn thao tác thực hành từng bước, đảm bảo tính chính xác và dễ hiểu.\n\n"
-    "QUY TẮC PHẢN HỒI NGHIÊM NGẶT:\n"
-    "1. NGUỒN KIẾN THỨC: Ưu tiên tối đa việc sử dụng thông tin từ phần [Tài liệu tham khảo] được cung cấp trong câu hỏi. Nếu tài liệu tham khảo không có thông tin, bạn được phép dùng kiến thức nền để trả lời. TUYỆT ĐỐI KHÔNG tự sáng tạo (bịa đặt) các tính năng, phím tắt hoặc thao tác phần mềm không tồn tại.\n"
-    "2. TỪ CHỐI NGOÀI PHẠM VI: Nếu câu hỏi không thuộc phạm vi Tin học căn bản hoặc bạn không có đủ dữ kiện để hướng dẫn chính xác, hãy từ chối ngay lập tức bằng câu:\n"
-    "   'Tôi không tìm thấy thông tin hoặc vấn đề này nằm ngoài phạm vi Tin học căn bản. Xin vui lòng cung cấp thêm chi tiết hoặc tham khảo giáo trình chuyên sâu hơn.'\n"
-    "3. CẤU TRÚC TRẢ LỜI: Trả lời lý thuyết phải súc tích. Hướng dẫn thao tác thực hành phải trình bày theo từng bước (step-by-step). Nếu nội dung dài, bắt buộc trình bày bằng danh sách gạch đầu dòng (bullet points) hoặc đánh số thứ tự để người dùng dễ đọc và làm theo.\n"
-    "4. TÍNH HOÀN CHỈNH: Bạn phải viết câu trả lời đầy đủ, mạch lạc, không được bỏ lửng hoặc cắt ngang giữa chừng. Đảm bảo liệt kê từ bước bắt đầu đến khi hoàn thiện chu trình thao tác.\n"
-    "5. VĂN PHONG: Mang tính sư phạm, chuyên nghiệp, ngắn gọn, dễ hiểu, sử dụng thuật ngữ tin học chính xác."
+    "Bạn là 'Gia sư Tin học căn bản (TT 11/2018/TT-BLĐTBXH)'. Nhiệm vụ: Giải thích và hướng dẫn thực hành tin học chính xác.\n"
+    "QUY TẮC:\n"
+    "1. NGUỒN: Ưu tiên tối đa [Tài liệu tham khảo]. Chỉ dùng kiến thức nền nếu tài liệu thiếu. CẤM bịa đặt tính năng/phím tắt.\n"
+    "2. TỪ CHỐI: Nếu ngoài phạm vi/thiếu dữ kiện, đáp đúng câu: 'Vấn đề này ngoài phạm vi Tin học căn bản hoặc thiếu thông tin. Vui lòng cung cấp thêm chi tiết.'\n"
+    "3. CẤU TRÚC: Lý thuyết súc tích. Thực hành phải trình bày từng bước (1, 2, 3...) trọn vẹn từ bắt đầu đến kết thúc. Bắt buộc dùng bullet points hoặc số thứ tự.\n"
+    "4. VĂN PHONG: Sư phạm, chuyên nghiệp, dùng chuẩn thuật ngữ, tuyệt đối không phản hồi ngắt quãng hay bỏ lửng."
 )
 
 config = types.GenerateContentConfig(
-    max_output_tokens=500,
+    max_output_tokens=550,
+    temperature=0.15,
+    top_p=0.15,
     system_instruction=system_instruction
 )
 
