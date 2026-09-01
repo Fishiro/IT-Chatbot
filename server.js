@@ -2,9 +2,51 @@ import express from "express";
 import cors from "cors";
 import axios from "axios";
 import rateLimit from "express-rate-limit";
+import { spawn } from "child_process";
 
 const app = express();
 const port = process.env.PORT || 3000;
+
+// ============================================================
+// FIX QUAN TRỌNG: Tự động khởi chạy Python backend (server.py)
+// → Trên Render (và đa số nền tảng free-tier khác), chỉ MỘT start
+//   command duy nhất được chạy khi deploy (thường là `npm start`).
+//   Nếu không tự spawn Python ở đây, server.py sẽ KHÔNG BAO GIỜ chạy
+//   trên production, khiến MỌI request /api/chat trả về 502 Bad Gateway
+//   vì Node không kết nối được tới localhost:5000.
+// → Đặt SKIP_PYTHON_SPAWN=1 khi chạy local bằng `npm run dev`
+//   (đã dùng `concurrently` để tự chạy 2 process riêng), tránh chạy
+//   trùng server.py 2 lần.
+// ============================================================
+function startPythonBackend() {
+    const pythonCmd = process.env.PYTHON_BIN || (process.platform === "win32" ? "python" : "python3");
+    console.log(`🔄 Đang khởi chạy Python backend bằng lệnh: ${pythonCmd} server.py`);
+
+    const pyProcess = spawn(pythonCmd, ["-X", "utf8", "server.py"], {
+        stdio: "inherit", // để log của Flask hiện chung trong log Render
+        env: process.env,
+    });
+
+    pyProcess.on("exit", (code, signal) => {
+        console.error(
+            `⚠️ Python backend (server.py) đã thoát (code=${code}, signal=${signal}). Khởi động lại sau 3s...`,
+        );
+        setTimeout(startPythonBackend, 3000);
+    });
+
+    pyProcess.on("error", (err) => {
+        console.error(
+            "❌ Không thể khởi chạy Python backend — kiểm tra PYTHON_BIN / python3 có sẵn trên môi trường deploy không:",
+            err.message,
+        );
+    });
+
+    return pyProcess;
+}
+
+if (process.env.SKIP_PYTHON_SPAWN !== "1") {
+    startPythonBackend();
+}
 
 // --- Cần thiết khi deploy sau reverse proxy (Render, v.v.) để
 //     express-rate-limit nhận đúng IP thật của client thay vì IP proxy ---
