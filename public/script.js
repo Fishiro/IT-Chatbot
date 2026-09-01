@@ -154,6 +154,16 @@ async function sendMessage() {
 
         const data = await response.json();
 
+        // FIX: nếu backend trả lỗi (429 rate-limit, 403 captcha, 502 bad
+        // gateway...), data sẽ không có "reply" mà có "error" — cần bung
+        // ra đúng lỗi thật ở đây, thay vì cố hiển thị reply=undefined rồi
+        // rơi vào lỗi JS chung chung khiến không biết nguyên nhân thật.
+        if (!response.ok) {
+            throw new Error(
+                data?.error || `Lỗi máy chủ (mã ${response.status}).`,
+            );
+        }
+
         // Lưu tin nhắn của AI vào session
         sessions[currentSessionID].messages.push({
             sender: "bot",
@@ -184,7 +194,13 @@ async function sendMessage() {
             document
                 .querySelectorAll(".typing-indicator")
                 .forEach((el) => el.remove());
-            addMessageToChat("bot", "Xin lỗi, đã có lỗi kết nối xảy ra.");
+            // Hiện lỗi thật (vd "Bạn gửi quá nhanh", "Bad Gateway"...) thay
+            // vì luôn hiện 1 câu chung chung — dễ chẩn đoán sự cố hơn.
+            const friendlyMessage =
+                error instanceof TypeError
+                    ? "Không thể kết nối tới máy chủ. Vui lòng kiểm tra mạng và thử lại."
+                    : error.message || "Xin lỗi, đã có lỗi xảy ra.";
+            addMessageToChat("bot", friendlyMessage);
 
             // Mở khóa UI do lỗi
             userInput.disabled = false;
