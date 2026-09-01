@@ -11,6 +11,31 @@ const API_URL =
         ? "http://localhost:5000/api/chat"
         : "/api/chat";
 
+// --- BẢO MẬT: phải TRÙNG với Site Key đã điền trong index.html ---
+const RECAPTCHA_SITE_KEY = "6Lc_1aItAAAAAB-QDCxy0BpLBn-uyLqoni7MvEdL";
+
+// Lấy token reCAPTCHA v3 (vô hình — không cần user thao tác gì).
+// Nếu vì lý do nào đó reCAPTCHA chưa load được (mạng chậm, bị chặn quảng
+// cáo...) thì trả về null, để không làm gãy trải nghiệm gửi tin nhắn —
+// backend sẽ tự quyết định chặn hay không khi thiếu token.
+async function getCaptchaToken(action = "chat") {
+    try {
+        if (typeof grecaptcha === "undefined" || !grecaptcha?.execute) {
+            return null;
+        }
+        return await new Promise((resolve) => {
+            grecaptcha.ready(() => {
+                grecaptcha
+                    .execute(RECAPTCHA_SITE_KEY, { action })
+                    .then(resolve)
+                    .catch(() => resolve(null));
+            });
+        });
+    } catch {
+        return null;
+    }
+}
+
 // --- QUẢN LÝ TRẠNG THÁI ---
 let currentAbortController = null;
 let currentTypingTimeout = null; // BIẾN MỚI: Dùng để quản lý tiến trình gõ phím của bot
@@ -111,6 +136,10 @@ async function sendMessage() {
     }
 
     try {
+        // BẢO MẬT: lấy token reCAPTCHA v3 vô hình trước khi gửi — không có
+        // bước thao tác nào của người dùng, chạy nền trong lúc gõ.
+        const captchaToken = await getCaptchaToken("chat");
+
         const response = await fetch(API_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -118,6 +147,7 @@ async function sendMessage() {
             body: JSON.stringify({
                 message: message,
                 sessionID: currentSessionID,
+                captchaToken: captchaToken,
             }),
             signal: signal,
         });
@@ -402,7 +432,8 @@ function addMessageToChat(sender, message, isTyping = false) {
         chatMessages.scrollTop = chatMessages.scrollHeight;
 
         let i = 0;
-        const speed = 8;
+        const speed = 8; // ms giữa mỗi lần "nhả" chữ (giảm để nhanh hơn nữa)
+        const charsPerTick = 6; // số ký tự nhả ra mỗi lần (tăng để nhanh hơn nữa)
         messageElement.textContent = "";
 
         function typeWriter() {
@@ -412,8 +443,11 @@ function addMessageToChat(sender, message, isTyping = false) {
                 chatMessages.scrollTop + 10;
 
             if (i < message.length) {
-                messageElement.textContent += message[i];
-                i++;
+                messageElement.textContent += message.slice(
+                    i,
+                    i + charsPerTick,
+                );
+                i += charsPerTick;
                 if (isNearBottom)
                     chatMessages.scrollTop = chatMessages.scrollHeight;
 
