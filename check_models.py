@@ -1,19 +1,19 @@
-import os
 from google import genai
-from dotenv import load_dotenv
 
-# Tải API Key từ file .env
-load_dotenv()
+client = genai.Client()
 
-# Khởi tạo kết nối với Google
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+print("Danh sách các model chuyên dụng cho Chat/Văn bản và hạn mức token:")
+print("=" * 60)
 
-print("Đang truy xuất danh sách model từ Google...")
-print("-" * 30)
-
-# Lọc và in ra những model có chữ "embedding" trong tên
 for model in client.models.list():
-    if "embedding" in model.name.lower():
-        print(f"Tên model khả dụng: {model.name}")
+    methods = getattr(model, "supported_generation_methods", [])
 
-print("-" * 30)
+    model_id = model.name.lower()
+
+    print(f"• Model ID: {model.name}")
+    print(f"  Tên hiển thị : {getattr(model, 'display_name', 'N/A')}")
+    print(f"  Input Token  : {getattr(model, 'input_token_limit', 'N/A'):,}" if isinstance(getattr(
+        model, 'input_token_limit', None), int) else f"  Input Token  : {getattr(model, 'input_token_limit', 'N/A')}")
+    print(f"  Output Token : {getattr(model, 'output_token_limit', 'N/A'):,}" if isinstance(getattr(
+        model, 'output_token_limit', None), int) else f"  Output Token : {getattr(model, 'output_token_limit', 'N/A')}")
+    print("-" * 60)
