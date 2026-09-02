@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import axios from "axios";
 import rateLimit from "express-rate-limit";
+import helmet from "helmet";
 import { spawn } from "child_process";
 
 const app = express();
@@ -51,6 +52,16 @@ if (process.env.SKIP_PYTHON_SPAWN !== "1") {
 // --- Cần thiết khi deploy sau reverse proxy (Render, v.v.) để
 //     express-rate-limit nhận đúng IP thật của client thay vì IP proxy ---
 app.set("trust proxy", 1);
+
+// --- BẢO MẬT: Helmet thêm các HTTP header bảo vệ mặc định
+//     (X-Content-Type-Options, X-Frame-Options, HSTS khi có HTTPS, v.v.)
+//     contentSecurityPolicy tắt mặc định vì trang dùng CDN ngoài
+//     (Tailwind CDN, reCAPTCHA, marked.js) — bật CSP thủ công riêng nếu cần. ---
+app.use(
+    helmet({
+        contentSecurityPolicy: false,
+    }),
+);
 
 app.use(express.json({ limit: "50kb" })); // chặn body quá lớn từ tầng ngoài cùng
 
@@ -125,10 +136,17 @@ app.post("/api/chat", chatLimiter, async (req, res) => {
 
         // Chuyển tiếp yêu cầu (kèm captchaToken) đến máy chủ Python — Python
         // là nơi thực sự xác minh captcha với Google trước khi gọi Gemini.
+        // --- BẢO MẬT: Kèm header bí mật để Flask biết request này thực sự
+        //     đến từ Node gateway, không phải ai đó gọi thẳng Flask. ---
         const pythonResponse = await axios.post(
             PYTHON_BACKEND_URL,
             { message, sessionID, captchaToken },
-            { timeout: 60_000 },
+            {
+                timeout: 60_000,
+                headers: process.env.INTERNAL_SECRET
+                    ? { "X-Internal-Secret": process.env.INTERNAL_SECRET }
+                    : {},
+            },
         );
 
         res.json(pythonResponse.data);
@@ -161,10 +179,17 @@ app.post("/api/chat", chatLimiter, async (req, res) => {
     }
 });
 
-// --- Xử lý lỗi CORS bị chặn (từ middleware cors() phía trên) gọn gàng ---
+// --- Xử lý lỗi CORS bị chặn (từ middleware cors() phía trên) và JSON
+//     bị gửi sai định dạng (từ express.json()) gọn gàng, tránh lộ
+//     stack trace mặc định của Express ra ngoài client. ---
 app.use((err, req, res, next) => {
     if (err && err.message && err.message.includes("CORS")) {
         return res.status(403).json({ error: "Origin không được phép." });
+    }
+    if (err && err.type === "entity.parse.failed") {
+        return res
+            .status(400)
+            .json({ error: "Dữ liệu gửi lên không hợp lệ (JSON sai định dạng)." });
     }
     next(err);
 });
