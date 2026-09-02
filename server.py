@@ -141,14 +141,59 @@ MAX_ACTIVE_SESSIONS = int(os.getenv("MAX_ACTIVE_SESSIONS", "200"))
 DEBUG_RAG = os.getenv("DEBUG_RAG", "0") == "1"
 
 
+# ============================================================
+# WRAPPER FALLBACK CHO EMBEDDING MODEL (RAG)
+# → Model embedding (dùng để tìm tài liệu liên quan) TRƯỚC ĐÂY chỉ
+#   dùng cố định VALID_API_KEYS[0]. Nếu key này hết quota, RAG bị
+#   âm thầm bỏ qua (chatbot trả lời "chay", không có tài liệu tham
+#   khảo) dù key thứ 2 vẫn còn hạn mức — đây là lỗ hổng đã fix ở đây.
+# → Wrapper này thử lần lượt từng key trong danh sách mỗi khi gọi
+#   embed_query/embed_documents, xoay vòng giống hệt cơ chế fallback
+#   của model chat bên dưới.
+# ============================================================
+class FallbackEmbeddings:
+    def __init__(self, api_keys, model="models/gemini-embedding-001"):
+        self._embedders = [
+            GoogleGenerativeAIEmbeddings(model=model, google_api_key=k)
+            for k in api_keys
+        ]
+        self._index = 0
+        self._lock = threading.Lock()
+
+    def _call_with_fallback(self, method_name, *args, **kwargs):
+        last_err = None
+        start = self._index
+        for offset in range(len(self._embedders)):
+            idx = (start + offset) % len(self._embedders)
+            try:
+                result = getattr(self._embedders[idx], method_name)(*args, **kwargs)
+                if idx != self._index:
+                    with self._lock:
+                        self._index = idx
+                    print(f"⚠️ [Embedding Fallback] Đã chuyển embedding sang key index {idx}")
+                return result
+            except Exception as e:
+                err_str = str(e).lower()
+                if "429" in err_str or "quota" in err_str or "exhausted" in err_str:
+                    print(f"⚠️ [Embedding Fallback] Key embedding index {idx} bị giới hạn, thử key kế tiếp...")
+                    last_err = e
+                    continue
+                raise  # lỗi khác (không phải quota) thì ném ra luôn, không thử key khác
+        raise last_err
+
+    # LangChain gọi 2 hàm này khi nạp FAISS và khi truy vấn similarity search
+    def embed_query(self, text):
+        return self._call_with_fallback("embed_query", text)
+
+    def embed_documents(self, texts):
+        return self._call_with_fallback("embed_documents", texts)
+
+
 def load_vectorstore():
     global retriever, vectorstore_error
     print("🔄 [Background] Đang nạp Vector DB (faiss_index)...")
     try:
-        embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/gemini-embedding-001",
-            google_api_key=VALID_API_KEYS[0] 
-        )
+        embeddings = FallbackEmbeddings(VALID_API_KEYS)
         vectorstore = FAISS.load_local(
             "faiss_index", embeddings, allow_dangerous_deserialization=True
         )
