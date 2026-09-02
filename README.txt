@@ -315,4 +315,4 @@ Sau khi chạy xong, commit `faiss_index/` và `embed_manifest.json` mới vào 
 
 ## 📄 License
 
-Phát hành theo giấy phép **MIT** — xem chi tiết tại [LICENSE](./LICENSE).
+**All Rights Reserved.** Đây **không phải** mã nguồn mở — mọi hình thức sao chép, sửa đổi, phân phối, hay triển khai lại (kể cả một phần) đều cần được sự đồng ý bằng văn bản của chủ sở hữu bản quyền. Xem chi tiết tại [LICENSE](./LICENSE).
