@@ -54,7 +54,7 @@ def serve_frontend(path):
 # --- Cấu hình Gemini (Hỗ trợ Fallback) ---
 api_keys_list = [
     os.getenv("GEMINI_API_KEY_1"),
-    os.getenv("GEMINI_API_KEY_2") # Bạn có thể để sẵn, nếu rỗng code sẽ tự bỏ qua
+    os.getenv("GEMINI_API_KEY_2")
 ]
 
 # Lọc ra danh sách các key hợp lệ (không bị None hoặc chuỗi rỗng)
