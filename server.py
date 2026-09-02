@@ -1,4 +1,5 @@
 import os
+import time
 import threading
 import requests
 from flask import Flask, request, jsonify, send_from_directory
@@ -24,6 +25,10 @@ app = Flask(__name__)
 #     thay vì luôn thấy IP nội bộ của proxy. Nếu thiếu dòng này,
 #     rate limit theo IP sẽ KHÔNG hoạt động đúng trên Render. ---
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+# --- BẢO MẬT: Giới hạn body size ở chính Flask, không chỉ dựa vào Node.
+#     Nếu ai gọi thẳng Flask (bỏ qua Node gateway), body lớn vẫn bị chặn. ---
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024  # 50KB, khớp với giới hạn ở Node
 
 CORS(app, origins=[
     "https://giasutinhoccanban.tech",
@@ -66,6 +71,38 @@ if not VALID_API_KEYS:
 # Khởi tạo sẵn các client tương ứng với từng key
 clients = [genai.Client(api_key=key) for key in VALID_API_KEYS]
 current_key_index = 0  # Biến toàn cục theo dõi key đang active
+key_index_lock = threading.Lock()  # BẢO MẬT: tránh race condition khi nhiều request cùng fallback
+
+# --- BẢO MẬT: Secret nội bộ giữa Node gateway <-> Flask backend ---
+# Nếu ai đó có URL trực tiếp của Flask (vd port 5000 lỡ public trên Render)
+# thì vẫn không gọi được /api/chat nếu thiếu header bí mật này, vì chỉ có
+# Node gateway biết secret (đọc từ cùng biến môi trường INTERNAL_SECRET).
+# Nếu chưa set biến này (vd đang chạy dev local) thì bỏ qua kiểm tra.
+INTERNAL_SECRET = os.getenv("INTERNAL_SECRET")
+
+# --- BẢO MẬT: Ban tạm các IP xác minh captcha thất bại quá nhiều lần ---
+# Đây là lớp chặn brute-force thêm bên cạnh rate-limit — nếu 1 IP fail
+# captcha nhiều lần liên tiếp trong khoảng thời gian ngắn, có khả năng
+# cao đó là bot/script chứ không phải người dùng thật.
+failed_captcha_ips = {}  # {ip: (count, first_fail_timestamp)}
+CAPTCHA_BAN_THRESHOLD = int(os.getenv("CAPTCHA_BAN_THRESHOLD", "5"))
+CAPTCHA_BAN_WINDOW = int(os.getenv("CAPTCHA_BAN_WINDOW", "300"))  # giây
+
+
+def is_ip_banned(ip):
+    entry = failed_captcha_ips.get(ip)
+    if not entry:
+        return False
+    count, first_time = entry
+    if time.time() - first_time > CAPTCHA_BAN_WINDOW:
+        failed_captcha_ips.pop(ip, None)
+        return False
+    return count >= CAPTCHA_BAN_THRESHOLD
+
+
+def register_captcha_failure(ip):
+    count, first_time = failed_captcha_ips.get(ip, (0, time.time()))
+    failed_captcha_ips[ip] = (count + 1, first_time)
 
 # --- Prompt Hệ thống ---
 system_instruction = (
@@ -172,15 +209,23 @@ def get_relevant_context(user_message: str):
 
 
 # FIX PING: Hỗ trợ cả GET lẫn HEAD (UptimeRobot dùng HEAD)
+# --- BẢO MẬT: /health CỐ TÌNH để mở, KHÔNG yêu cầu captcha/secret,
+#     vì UptimeRobot và Render health-check cần gọi được tự do để giữ
+#     server không bị sleep / biết trạng thái deploy. Chỉ ẩn bớt chi
+#     tiết lỗi nội bộ (vectordb_error) khỏi người gọi thường, để không
+#     lộ đường dẫn file/nội dung lỗi ra ngoài. ---
 @app.route("/health", methods=["GET", "HEAD"])
 def health():
-    return jsonify({
+    is_internal = bool(INTERNAL_SECRET) and request.headers.get("X-Internal-Secret") == INTERNAL_SECRET
+    payload = {
         "status": "ok",
         "vectordb_ready": vectorstore_ready.is_set(),
         "vectordb_loaded": retriever is not None,
-        "vectordb_error": vectorstore_error,
         "active_sessions": len(active_sessions),
-    }), 200
+    }
+    if is_internal:
+        payload["vectordb_error"] = vectorstore_error
+    return jsonify(payload), 200
 
 
 active_sessions = {}
@@ -240,6 +285,18 @@ def verify_captcha(token, remote_ip=None):
 def chat():
     global current_key_index # Khai báo để có thể thay đổi key đang dùng
     try:
+        # --- BẢO MẬT: Chỉ chấp nhận request đến từ Node gateway (biết secret) ---
+        if INTERNAL_SECRET and request.headers.get("X-Internal-Secret") != INTERNAL_SECRET:
+            return jsonify({"error": "Không có quyền truy cập."}), 403
+
+        client_ip = request.remote_addr
+
+        # --- BẢO MẬT: Chặn IP đang bị ban tạm do fail captcha nhiều lần ---
+        if is_ip_banned(client_ip):
+            return jsonify({
+                "error": "IP của bạn tạm thời bị chặn do xác minh bảo mật thất bại nhiều lần. Vui lòng thử lại sau."
+            }), 429
+
         data = request.get_json(silent=True) or {}
         user_message = data.get("message")
         session_id = data.get("sessionID")
@@ -255,7 +312,8 @@ def chat():
         if not isinstance(session_id, str) or len(session_id) > 100:
             return jsonify({"error": "sessionID không hợp lệ."}), 400
 
-        if not verify_captcha(captcha_token, request.remote_addr):
+        if not verify_captcha(captcha_token, client_ip):
+            register_captcha_failure(client_ip)
             return jsonify({
                 "error": "Xác minh bảo mật thất bại. Vui lòng tải lại trang và thử lại."
             }), 403
@@ -320,7 +378,10 @@ def chat():
                     print(f"⚠️ [Fallback] Key index {current_key_index} bị giới hạn. Đang chuyển sang key tiếp theo...")
                     
                     # Chuyển sang key kế tiếp (quay vòng tròn nếu hết mảng)
-                    current_key_index = (current_key_index + 1) % len(VALID_API_KEYS)
+                    # BẢO MẬT/AN TOÀN: dùng lock để tránh 2 request đồng thời
+                    # cùng đổi current_key_index chồng lên nhau (race condition).
+                    with key_index_lock:
+                        current_key_index = (current_key_index + 1) % len(VALID_API_KEYS)
                     
                     # BẢO TOÀN LỊCH SỬ CHAT: Chuyển lịch sử sang session thuộc Client/Key mới
                     if session_id in active_sessions:
