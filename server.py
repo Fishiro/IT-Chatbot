@@ -6,6 +6,7 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_talisman import Talisman
 from werkzeug.middleware.proxy_fix import ProxyFix
 from google import genai
 from google.genai import types
@@ -25,6 +26,22 @@ app = Flask(__name__)
 #     thay vì luôn thấy IP nội bộ của proxy. Nếu thiếu dòng này,
 #     rate limit theo IP sẽ KHÔNG hoạt động đúng trên Render. ---
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+# --- BẢO MẬT: Talisman tự thêm các HTTP security header tương đương
+#     helmet bên Node (X-Content-Type-Options, X-Frame-Options, HSTS...).
+#     Vì Render đang chạy THẲNG Flask (không qua Node gateway), phần
+#     helmet cũ trong server.js KHÔNG hề có tác dụng trên production —
+#     Talisman ở đây mới là nơi thực sự áp dụng các header này.
+#     - content_security_policy=None: tắt CSP vì frontend (nếu Flask tự
+#       phục vụ) có gọi CDN ngoài (Tailwind, reCAPTCHA, marked.js) — bật
+#       CSP mặc định sẽ chặn nhầm các script này. Có thể cấu hình CSP
+#       chi tiết sau nếu muốn chặt hơn.
+#     - force_https=True: Render luôn phục vụ qua HTTPS nên an toàn để bật.
+Talisman(
+    app,
+    content_security_policy=None,
+    force_https=True,
+)
 
 # --- BẢO MẬT: Giới hạn body size ở chính Flask, không chỉ dựa vào Node.
 #     Nếu ai gọi thẳng Flask (bỏ qua Node gateway), body lớn vẫn bị chặn. ---
