@@ -21,7 +21,7 @@ from langchain_core.documents import Document
 # CẤU HÌNH (có thể chỉnh qua biến môi trường, không cần sửa code)
 # ============================================================
 DATA_FOLDER = "learning_data"
-INDEX_FOLDER = "faiss_index"
+INDEX_FOLDER = "../faiss_index"
 MANIFEST_PATH = "embed_manifest.json"
 
 # Số đoạn văn bản gửi trong 1 lần gọi API embedding.
@@ -39,15 +39,15 @@ LEGACY_EXTENSIONS = {".doc": ".docx", ".ppt": ".pptx", ".xls": ".xlsx"}
 def load_api_keys():
     """
     Đọc danh sách API key từ .env. Hỗ trợ 2 cách:
-    - GEMINI_API_KEYS="key1,key2,key3,key4,key5"  (khuyên dùng, phân tách bằng dấu phẩy)
-    - GEMINI_API_KEY="key1"                        (chỉ 1 key, giữ tương thích ngược)
+    - GEMINI_API_KEYS_EMBED="key1,key2,key3,key4,key5"  (khuyên dùng, phân tách bằng dấu phẩy)
+    - GEMINI_API_KEY_EMBED="key1"                        (chỉ 1 key, giữ tương thích ngược)
     """
-    multi = os.getenv("GEMINI_API_KEYS")
+    multi = os.getenv("GEMINI_API_KEYS_EMBED")
     if multi:
         keys = [k.strip() for k in multi.split(",") if k.strip()]
         if keys:
             return keys
-    single = os.getenv("GEMINI_API_KEY")
+    single = os.getenv("GEMINI_API_KEY_EMBED")
     return [single] if single else []
 
 
