@@ -20,8 +20,12 @@ const port = process.env.PORT || 3000;
 //   trùng server.py 2 lần.
 // ============================================================
 function startPythonBackend() {
-    const pythonCmd = process.env.PYTHON_BIN || (process.platform === "win32" ? "python" : "python3");
-    console.log(`🔄 Đang khởi chạy Python backend bằng lệnh: ${pythonCmd} server.py`);
+    const pythonCmd =
+        process.env.PYTHON_BIN ||
+        (process.platform === "win32" ? "python" : "python3");
+    console.log(
+        `🔄 Đang khởi chạy Python backend bằng lệnh: ${pythonCmd} server.py`,
+    );
 
     const pyProcess = spawn(pythonCmd, ["-X", "utf8", "server.py"], {
         stdio: "inherit", // để log của Flask hiện chung trong log Render
@@ -56,7 +60,12 @@ app.set("trust proxy", 1);
 // --- BẢO MẬT: Helmet thêm các HTTP header bảo vệ mặc định
 //     (X-Content-Type-Options, X-Frame-Options, HSTS khi có HTTPS, v.v.)
 //     contentSecurityPolicy tắt mặc định vì trang dùng CDN ngoài
-//     (Tailwind CDN, reCAPTCHA, marked.js) — bật CSP thủ công riêng nếu cần. ---
+//     (Tailwind CDN, reCAPTCHA, marked.js) — bật CSP thủ công riêng nếu cần.
+//     KIẾN TRÚC: server.js là entrypoint DUY NHẤT được public ra ngoài
+//     (port do Render cấp qua $PORT). HTTPS thật với người dùng được
+//     Render/edge + helmet đảm nhiệm ở đây; server.py chỉ nhận request
+//     nội bộ qua http://localhost:5000 nên KHÔNG cần (và không nên) tự
+//     ép buộc HTTPS ở tầng đó. ---
 app.use(
     helmet({
         contentSecurityPolicy: false,
@@ -66,14 +75,19 @@ app.use(
 app.use(express.json({ limit: "50kb" })); // chặn body quá lớn từ tầng ngoài cùng
 
 // --- BẢO MẬT: Whitelist CORS thay vì mở toàn bộ ---
-// Phải khớp với danh sách origins trong server.py
-const ALLOWED_ORIGINS = [
-    "https://giasutinhoccanban.tech",
-    "https://it-chatbot.vercel.app",
-    "http://localhost:3000",
-    "http://localhost:5000",
-    "http://localhost:5500",
-];
+// Đọc từ biến môi trường ALLOWED_ORIGINS (phân tách bởi dấu phẩy) nếu có,
+// để dùng CHUNG cấu hình với server.py — tránh lệch danh sách giữa 2 tầng
+// khi thêm/sửa domain (chỉ cần set 1 biến env, không phải sửa 2 file).
+// Nếu chưa set (vd dev local) thì fallback về danh sách mặc định như cũ.
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(",").map((s) => s.trim())
+    : [
+          "https://giasutinhoccanban.tech",
+          "https://it-chatbot.vercel.app",
+          "http://localhost:3000",
+          "http://localhost:5000",
+          "http://localhost:5500",
+      ];
 
 app.use(
     cors({
@@ -159,9 +173,17 @@ app.post("/api/chat", chatLimiter, async (req, res) => {
                 error.response.status,
                 error.response.data,
             );
-            res.status(error.response.status).json({
-                error: "Có lỗi xảy ra khi xử lý yêu cầu. Vui lòng thử lại.",
-            });
+            // Các lỗi 4xx từ Flask đã là thông báo an toàn cho người dùng
+            // (ví dụ captcha 403 hoặc rate-limit 429), nên có thể giữ lại.
+            // Tuyệt đối không đẩy chi tiết nội bộ của lỗi 5xx ra ngoài.
+            const backendStatus = error.response.status;
+            const backendError = error.response.data?.error;
+            const safeError =
+                backendStatus >= 400 && backendStatus < 500 && backendError
+                    ? backendError
+                    : "Có lỗi xảy ra khi xử lý yêu cầu. Vui lòng thử lại.";
+
+            res.status(backendStatus).json({ error: safeError });
         } else if (error.request) {
             console.error(
                 "Không thể kết nối đến máy chủ Python:",
@@ -189,7 +211,9 @@ app.use((err, req, res, next) => {
     if (err && err.type === "entity.parse.failed") {
         return res
             .status(400)
-            .json({ error: "Dữ liệu gửi lên không hợp lệ (JSON sai định dạng)." });
+            .json({
+                error: "Dữ liệu gửi lên không hợp lệ (JSON sai định dạng).",
+            });
     }
     next(err);
 });

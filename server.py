@@ -16,6 +16,7 @@ import socket
 # --- Import thêm thư viện cho Vector DB ---
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_community.vectorstores import FAISS
+from langchain_core.embeddings import Embeddings
 
 load_dotenv()
 
@@ -29,31 +30,58 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 # --- BẢO MẬT: Talisman tự thêm các HTTP security header tương đương
 #     helmet bên Node (X-Content-Type-Options, X-Frame-Options, HSTS...).
-#     Vì Render đang chạy THẲNG Flask (không qua Node gateway), phần
-#     helmet cũ trong server.js KHÔNG hề có tác dụng trên production —
-#     Talisman ở đây mới là nơi thực sự áp dụng các header này.
+#     KIẾN TRÚC THỰC TẾ: server.js là entrypoint DUY NHẤT được public ra
+#     ngoài (port do Render cấp qua $PORT); nó tự spawn server.py và chỉ
+#     gọi Flask qua http://localhost:5000 — Flask KHÔNG public trực tiếp.
+#     Vì vậy: helmet (Node) bảo vệ traffic thật từ người dùng; Talisman ở
+#     đây chỉ là lớp phòng thủ bổ sung phòng trường hợp có ai gọi thẳng
+#     vào Flask nội bộ (đã có INTERNAL_SECRET chặn thêm ở route /api/chat).
 #     - content_security_policy=None: tắt CSP vì frontend (nếu Flask tự
-#       phục vụ) có gọi CDN ngoài (Tailwind, reCAPTCHA, marked.js) — bật
-#       CSP mặc định sẽ chặn nhầm các script này. Có thể cấu hình CSP
-#       chi tiết sau nếu muốn chặt hơn.
-#     - force_https=True: Render luôn phục vụ qua HTTPS nên an toàn để bật.
+#       phục vụ) có gọi CDN ngoài (Tailwind, reCAPTCHA, marked.js).
+#     - force_https=False: BẮT BUỘC để False. Flask chỉ nhận request nội
+#       bộ qua http://localhost:5000 (không có TLS, không có header
+#       X-Forwarded-Proto). Nếu để True, Talisman sẽ redirect NGAY CẢ
+#       cuộc gọi nội bộ của axios sang https://localhost:5000 — nơi Flask
+#       không lắng nghe TLS — khiến MỌI request /api/chat qua gateway lỗi
+#       502. HTTPS thật với người dùng đã do Node (helmet) + Render/edge
+#       đảm nhiệm ở tầng ngoài.
 Talisman(
     app,
     content_security_policy=None,
-    force_https=True,
+    force_https=False,
 )
 
 # --- BẢO MẬT: Giới hạn body size ở chính Flask, không chỉ dựa vào Node.
 #     Nếu ai gọi thẳng Flask (bỏ qua Node gateway), body lớn vẫn bị chặn. ---
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024  # 50KB, khớp với giới hạn ở Node
 
-CORS(app, origins=[
+# --- BẢO MẬT: Whitelist CORS thay vì mở toàn bộ ---
+# Đọc từ biến môi trường ALLOWED_ORIGINS (phân tách bởi dấu phẩy) nếu có,
+# để dùng CHUNG cấu hình với server.js — tránh lệch danh sách giữa 2 tầng
+# khi thêm/sửa domain (chỉ cần set 1 biến env, không phải sửa 2 file).
+# Nếu chưa set (vd dev local) thì fallback về danh sách mặc định như cũ.
+_default_origins = [
     "https://giasutinhoccanban.tech",
     "https://it-chatbot.vercel.app",
     "http://localhost:3000",
     "http://localhost:5000",
     "http://localhost:5500",
-])
+    # Trình duyệt coi "localhost" và "127.0.0.1" là 2 origin KHÁC NHAU dù
+    # cùng chạy trên máy local. Nhiều IDE (VS Code Simple Browser...) tự
+    # mở bằng 127.0.0.1 thay vì localhost, nếu thiếu các dòng dưới đây
+    # sẽ bị CORS chặn request /api/chat dù chạy đúng trên máy mình.
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5000",
+    "http://127.0.0.1:5500",
+]
+_env_origins = os.getenv("ALLOWED_ORIGINS")
+ALLOWED_ORIGINS = (
+    [o.strip() for o in _env_origins.split(",") if o.strip()]
+    if _env_origins
+    else _default_origins
+)
+
+CORS(app, origins=ALLOWED_ORIGINS)
 
 # --- BẢO MẬT: Giới hạn request/IP để chống spam & bòn rút quota Gemini.
 #     Đây là lớp chặn quan trọng nhất vì Flask có thể bị gọi trực tiếp
@@ -65,13 +93,17 @@ limiter = Limiter(
     storage_uri="memory://",  # đủ dùng cho 1 instance free-tier; không cần Redis
 )
 
-# --- Phục vụ Frontend tĩnh (dùng khi deploy trực tiếp Python, không qua Node gateway) ---
+# --- Phục vụ Frontend tĩnh (dùng khi chạy `npm run start:py` một mình để
+#     debug riêng backend Python, không đi qua Node gateway) ---
+
+
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def serve_frontend(path):
     if path and os.path.exists(os.path.join("public", path)):
         return send_from_directory("public", path)
     return send_from_directory("public", "index.html")
+
 
 # --- Cấu hình Gemini (Hỗ trợ Fallback) ---
 api_keys_list = [
@@ -83,18 +115,23 @@ api_keys_list = [
 VALID_API_KEYS = [k for k in api_keys_list if k]
 
 if not VALID_API_KEYS:
-    raise ValueError("Không tìm thấy bất kỳ GEMINI_API_KEY nào. Hãy kiểm tra file .env!")
+    raise ValueError(
+        "Không tìm thấy bất kỳ GEMINI_API_KEY nào. Hãy kiểm tra file .env!")
 
 # Khởi tạo sẵn các client tương ứng với từng key
 clients = [genai.Client(api_key=key) for key in VALID_API_KEYS]
 current_key_index = 0  # Biến toàn cục theo dõi key đang active
-key_index_lock = threading.Lock()  # BẢO MẬT: tránh race condition khi nhiều request cùng fallback
+# BẢO MẬT: tránh race condition khi nhiều request cùng fallback
+key_index_lock = threading.Lock()
 
 # --- BẢO MẬT: Secret nội bộ giữa Node gateway <-> Flask backend ---
 # Nếu ai đó có URL trực tiếp của Flask (vd port 5000 lỡ public trên Render)
 # thì vẫn không gọi được /api/chat nếu thiếu header bí mật này, vì chỉ có
 # Node gateway biết secret (đọc từ cùng biến môi trường INTERNAL_SECRET).
 # Nếu chưa set biến này (vd đang chạy dev local) thì bỏ qua kiểm tra.
+# KHUYẾN NGHỊ: LUÔN set INTERNAL_SECRET trên production (Render) — đây là
+# lớp chặn duy nhất ngăn ai đó bỏ qua toàn bộ CORS/rate-limit của Node
+# nếu port của Flask vô tình lộ ra ngoài.
 INTERNAL_SECRET = os.getenv("INTERNAL_SECRET")
 
 # --- BẢO MẬT: Ban tạm các IP xác minh captcha thất bại quá nhiều lần ---
@@ -121,14 +158,142 @@ def register_captcha_failure(ip):
     count, first_time = failed_captcha_ips.get(ip, (0, time.time()))
     failed_captcha_ips[ip] = (count + 1, first_time)
 
+
+def reset_captcha_failures(ip):
+    """Xóa bộ đếm fail sau khi IP xác minh captcha thành công."""
+    failed_captcha_ips.pop(ip, None)
+
+
+# --- TITLE LOCAL (KHÔNG GỌI AI / KHÔNG TẠO REQUEST PHỤ) ---
+TITLE_STOPWORDS = {
+    "xin", "chào", "bạn", "tôi", "mình", "cho", "giúp", "giúp tôi",
+    "có", "thể", "được", "với", "một", "về", "này", "nhé",
+    "ạ", "là", "thì", "đang", "vui", "lòng", "hỏi", "muốn", "muốn hỏi",
+    "hãy", "theo", "sao", "thế", "nào", "bị", "trong"
+}
+
+
+def generate_local_title(message, max_words=7, max_chars=60):
+    """Tạo tiêu đề nhanh bằng heuristic, không gọi Gemini và không tạo request phụ."""
+    import re
+
+    text = re.sub(r"\s+", " ", str(message or "")).strip()
+    text = re.sub(r"^[\s\"'“”‘’]+|[\s\"'“”‘’]+$", "", text)
+    if not text:
+        return "Đoạn chat mới"
+
+    # Bỏ các cụm mở đầu thường không mang ý nghĩa chủ đề.
+    leading_patterns = [
+        r"^(?:xin\s+chào[ ,:!-]*)",
+        r"^(?:cho\s+(?:tôi|mình)\s+hỏi[ ,:!-]*)",
+        r"^(?:mình|tôi)\s+muốn\s+hỏi[ ,:!-]*",
+        r"^(?:bạn\s+)?có\s+thể\s+giúp(?:\s+(?:tôi|mình))?[ ,:!-]*",
+        r"^(?:hãy\s+)?giúp(?:\s+(?:tôi|mình))?[ ,:!-]*",
+        r"^(?:vui\s+lòng\s+)?hướng\s+dẫn[ ,:!-]*",
+        r"^(?:cho\s+(?:tôi|mình)\s+)?biết[ ,:!-]*",
+        r"^(?:làm\s+sao|làm\s+thế\s+nào)[ ,:!-]*",
+        r"^cách[ ,:!-]+",
+    ]
+    for pattern in leading_patterns:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+
+    text = re.sub(r"[?!]+$", "", text).strip()
+    words = text.split()
+
+    # Giữ nguyên thứ tự để title vẫn tự nhiên, chỉ loại filler ngắn.
+    filtered = []
+    for word in words:
+        clean = re.sub(r"^[^\wÀ-ỹ]+|[^\wÀ-ỹ./:+#_-]+$",
+                       "", word, flags=re.UNICODE)
+        if not clean:
+            continue
+        normalized = clean.lower()
+        if normalized in TITLE_STOPWORDS and len(words) > 5:
+            continue
+        filtered.append(clean)
+        if len(filtered) >= max_words:
+            break
+
+    title = " ".join(filtered).strip(" -:;,.!?/")
+    if not title:
+        title = " ".join(words[:max_words]).strip(" -:;,.!?/")
+
+    if len(title) > max_chars:
+        title = title[:max_chars].rsplit(" ", 1)[0].rstrip(" -:;,.!?/")
+
+    if title:
+        title = title[0].upper() + title[1:]
+    return title or "Đoạn chat mới"
+
+
+# --- SMALL-TALK / META INTENT (KHÔNG CẦN RAG) ---
+# Các câu chào hỏi, cảm ơn hoặc hỏi chatbot có thể làm gì không phải
+# câu hỏi kiến thức. Không đưa chúng qua FAISS vì rất dễ không đạt
+# RAG_MIN_RELEVANCE và bị system prompt buộc từ chối.
+def detect_small_talk(user_message: str):
+    """Trả về câu trả lời trực tiếp cho small-talk, hoặc None nếu không phải."""
+    import re
+
+    text = re.sub(r"\s+", " ", str(user_message or "")).strip().lower()
+    normalized = re.sub(r"[!?.,;:]+", " ", text)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+
+    # Chỉ chào hỏi khi toàn bộ câu thực sự là lời chào.
+    greetings = {
+        "xin chào", "chào", "hello", "hi", "hey", "chào bạn",
+        "xin chào ai", "chào ai", "hello ai", "hi ai",
+    }
+    if normalized in greetings:
+        return (
+            "Xin chào! Tôi là Gia sư Tin học căn bản. "
+            "Tôi có thể giúp bạn học và thực hành các nội dung tin học "
+            "cơ bản như Windows, Word, Excel, PowerPoint, Internet và các thao tác máy tính."
+        )
+
+    # Hỏi về khả năng/chức năng của chính chatbot.
+    capability_patterns = [
+        r"^bạn (?:có thể|có khả năng|làm được|giúp được|hỗ trợ) (?:tôi )?(?:làm )?gì$",
+        r"^bạn (?:có thể|có khả năng|làm được|giúp được|hỗ trợ) gì$",
+        r"^bạn có thể giúp gì(?: cho tôi)?$",
+        r"^bạn giúp được gì(?: cho tôi)?$",
+        r"^bạn hỗ trợ được gì(?: cho tôi)?$",
+        r"^bạn làm được những gì$",
+        r"^bạn có những chức năng gì$",
+        r"^chức năng của bạn là gì$",
+        r"^bạn là ai$",
+    ]
+    if any(re.fullmatch(pattern, normalized, flags=re.IGNORECASE)
+           for pattern in capability_patterns):
+        return (
+            "Tôi là Gia sư Tin học căn bản. Tôi tập trung hỗ trợ học và thực hành "
+            "tin học cơ bản, chẳng hạn như Windows, Word, Excel, PowerPoint, "
+            "Internet và các thao tác máy tính. Bạn chỉ cần gửi câu hỏi hoặc "
+            "mô tả vấn đề cần giải quyết."
+        )
+
+    # Cảm ơn/kết thúc hội thoại đơn giản.
+    thanks = {
+        "cảm ơn", "cảm ơn bạn", "cảm ơn ai", "thanks", "thank you",
+        "ok cảm ơn", "được rồi cảm ơn", "cảm ơn nhé", "cảm ơn nha",
+    }
+    if normalized in thanks:
+        return "Không có gì! Khi cần hỗ trợ về Tin học căn bản, bạn cứ gửi câu hỏi cho tôi."
+
+    return None
+
+
 # --- Prompt Hệ thống ---
 system_instruction = (
     "Bạn là 'Gia sư Tin học căn bản (TT 11/2018/TT-BLĐTBXH)'. Nhiệm vụ: Giải thích và hướng dẫn thực hành tin học chính xác.\n"
     "QUY TẮC:\n"
-    "1. NGUỒN: Ưu tiên tối đa [Tài liệu tham khảo]. Chỉ dùng kiến thức nền nếu tài liệu thiếu, trả lời trong phạm vi dưới 550 token. CẤM bịa đặt tính năng/phím tắt.\n"
+    "1. NGUỒN: Phần [Kiến thức nền] (nếu có) là tri thức NỘI BỘ bạn đã nắm sẵn từ trước — TUYỆT ĐỐI KHÔNG nói các câu kiểu "
+    "'dựa trên tài liệu bạn cung cấp/vừa gửi', 'theo tài liệu bạn đưa', 'dựa vào file bạn tải lên'. Người dùng KHÔNG hề gửi "
+    "tài liệu nào trong lượt chat — hãy trả lời thẳng vào nội dung như một chuyên gia đã am hiểu sẵn, không nhắc đến nguồn "
+    "hay quá trình bạn lấy thông tin ở đâu. Nếu [Kiến thức nền] trống hoặc thiếu, TUYỆT ĐỐI KHÔNG dùng kiến thức nền của bạn để trả lời và chỉ phản hồi lại 'Vấn đề này ngoài phạm vi Tin học căn bản hoặc thiếu thông tin. Vui lòng cung cấp thêm chi tiết.', trả lời trong "
+    "ngắn gọn trong phạm vi dưới 550 token. CẤM bịa đặt tính năng/phím tắt.\n"
     "2. TỪ CHỐI: Nếu ngoài phạm vi/thiếu dữ kiện, đáp đúng câu: 'Vấn đề này ngoài phạm vi Tin học căn bản hoặc thiếu thông tin. Vui lòng cung cấp thêm chi tiết.'\n"
     "3. CẤU TRÚC: Lý thuyết súc tích. Thực hành phải trình bày từng bước (1, 2, 3...) trọn vẹn từ bắt đầu đến kết thúc. Bắt buộc dùng bullet points hoặc số thứ tự.\n"
-    "4. VĂN PHONG: Sư phạm, chuyên nghiệp, dùng chuẩn thuật ngữ, tuyệt đối không phản hồi ngắt quãng hay bỏ lửng."
+    "4. VĂN PHONG: Sư phạm, chuyên nghiệp, tự tin như người đã am hiểu sẵn kiến thức, dùng chuẩn thuật ngữ, tuyệt đối không phản hồi ngắt quãng hay bỏ lửng."
 )
 
 config = types.GenerateContentConfig(
@@ -148,12 +313,14 @@ config = types.GenerateContentConfig(
 #   phù hợp free tier.
 # ============================================================
 retriever = None
-vectorstore_ready = threading.Event()   # set() khi nạp XONG (thành công hay thất bại)
+# set() khi nạp XONG (thành công hay thất bại)
+vectorstore_ready = threading.Event()
 vectorstore_error = None
 
 RAG_MAX_WAIT_SECONDS = float(os.getenv("RAG_MAX_WAIT_SECONDS", "55"))
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "3"))
-RAG_MIN_RELEVANCE = float(os.getenv("RAG_MIN_RELEVANCE", "0.55"))  # 0..1, càng cao càng chặt
+# 0..1, càng cao càng chặt
+RAG_MIN_RELEVANCE = float(os.getenv("RAG_MIN_RELEVANCE", "0.55"))
 MAX_ACTIVE_SESSIONS = int(os.getenv("MAX_ACTIVE_SESSIONS", "200"))
 DEBUG_RAG = os.getenv("DEBUG_RAG", "0") == "1"
 
@@ -168,7 +335,13 @@ DEBUG_RAG = os.getenv("DEBUG_RAG", "0") == "1"
 #   embed_query/embed_documents, xoay vòng giống hệt cơ chế fallback
 #   của model chat bên dưới.
 # ============================================================
-class FallbackEmbeddings:
+class FallbackEmbeddings(Embeddings):
+    # QUAN TRỌNG: PHẢI kế thừa langchain_core.embeddings.Embeddings.
+    # FAISS dùng isinstance(embedding_function, Embeddings) để quyết định
+    # gọi .embed_query()/.embed_documents() (đúng) hay gọi trực tiếp
+    # embedding_function(text) như một hàm cũ (deprecated, và class này
+    # không có __call__ nên sẽ ném lỗi "object is not callable"). Thiếu
+    # dòng kế thừa này khiến RAG bị âm thầm vô hiệu ở MỌI câu hỏi.
     def __init__(self, api_keys, model="models/gemini-embedding-001"):
         self._embedders = [
             GoogleGenerativeAIEmbeddings(model=model, google_api_key=k)
@@ -183,19 +356,23 @@ class FallbackEmbeddings:
         for offset in range(len(self._embedders)):
             idx = (start + offset) % len(self._embedders)
             try:
-                result = getattr(self._embedders[idx], method_name)(*args, **kwargs)
+                result = getattr(self._embedders[idx], method_name)(
+                    *args, **kwargs)
                 if idx != self._index:
                     with self._lock:
                         self._index = idx
-                    print(f"⚠️ [Embedding Fallback] Đã chuyển embedding sang key index {idx}")
+                    print(
+                        f"⚠️ [Embedding Fallback] Đã chuyển embedding sang key index {idx}")
                 return result
             except Exception as e:
                 err_str = str(e).lower()
                 if "429" in err_str or "quota" in err_str or "exhausted" in err_str:
-                    print(f"⚠️ [Embedding Fallback] Key embedding index {idx} bị giới hạn, thử key kế tiếp...")
+                    print(
+                        f"⚠️ [Embedding Fallback] Key embedding index {idx} bị giới hạn, thử key kế tiếp...")
                     last_err = e
                     continue
-                raise  # lỗi khác (không phải quota) thì ném ra luôn, không thử key khác
+                # lỗi khác (không phải quota) thì ném ra luôn, không thử key khác
+                raise
         raise last_err
 
     # LangChain gọi 2 hàm này khi nạp FAISS và khi truy vấn similarity search
@@ -250,7 +427,8 @@ def get_relevant_context(user_message: str):
         print(f"⚠️ [RAG] Lỗi truy vấn vector DB, bỏ qua RAG cho câu này: {e}")
         return "", False, []
 
-    good_docs = [(doc, score) for doc, score in results if score >= RAG_MIN_RELEVANCE]
+    good_docs = [(doc, score)
+                 for doc, score in results if score >= RAG_MIN_RELEVANCE]
 
     if DEBUG_RAG:
         print(f"🔎 [RAG] Câu hỏi: {user_message!r}")
@@ -262,10 +440,7 @@ def get_relevant_context(user_message: str):
     if not good_docs:
         return "", False, []
 
-    context = "\n\n".join([
-        f"- Nội dung: {doc.page_content}\n(Nguồn: {doc.metadata.get('source', 'Không rõ')})"
-        for doc, _ in good_docs
-    ])
+    context = "\n\n".join([doc.page_content for doc, _ in good_docs])
     sources = [doc.metadata.get("source", "Không rõ") for doc, _ in good_docs]
     return context, True, sources
 
@@ -278,7 +453,8 @@ def get_relevant_context(user_message: str):
 #     lộ đường dẫn file/nội dung lỗi ra ngoài. ---
 @app.route("/health", methods=["GET", "HEAD"])
 def health():
-    is_internal = bool(INTERNAL_SECRET) and request.headers.get("X-Internal-Secret") == INTERNAL_SECRET
+    is_internal = bool(INTERNAL_SECRET) and request.headers.get(
+        "X-Internal-Secret") == INTERNAL_SECRET
     payload = {
         "status": "ok",
         "vectordb_ready": vectorstore_ready.is_set(),
@@ -310,17 +486,34 @@ RECAPTCHA_EXPECTED_ACTION = "chat"
 
 def verify_captcha(token, remote_ip=None):
     """
-    Trả True nếu request được coi là hợp lệ (cho phép đi tiếp).
-    - Nếu chưa cấu hình RECAPTCHA_SECRET_KEY (vd đang chạy local dev)
-      → bỏ qua việc kiểm tra, không chặn nhầm.
-    - Nếu Google API lỗi tạm thời (mạng, timeout) → fail-open (cho qua),
-      vì đây chỉ là 1 lớp phòng thủ bổ sung bên cạnh rate-limit, không
-      phải lớp duy nhất — tránh chặn nhầm người dùng thật khi Google sập.
+    Xác minh reCAPTCHA v3 và log đầy đủ lý do thành công/thất bại.
+
+    Không log token/secret để tránh lộ thông tin bảo mật.
     """
+
+    print("\n" + "═" * 64)
+    print("🔐 [CAPTCHA] XÁC MINH REQUEST")
+    print(f"   IP        : {remote_ip or 'UNKNOWN'}")
+    print(f"   Token     : {'PRESENT' if token else 'MISSING'}")
+    print(f"   Threshold : {RECAPTCHA_MIN_SCORE}")
+    print(f"   Expected  : {RECAPTCHA_EXPECTED_ACTION}")
+    print("═" * 64)
+
+    # Local development: không cấu hình secret thì bỏ qua CAPTCHA
     if not RECAPTCHA_SECRET_KEY:
+        print("🟡 [CAPTCHA] SKIP")
+        print("   Lý do     : RECAPTCHA_SECRET_KEY chưa được cấu hình")
+        print("   Chế độ    : FAIL-OPEN / LOCAL DEV")
+        print("═" * 64)
         return True
+
+    # Không có token
     if not token:
+        print("🔴 [CAPTCHA] FAIL")
+        print("   Reason    : TOKEN_MISSING")
+        print("═" * 64)
         return False
+
     try:
         resp = requests.post(
             "https://www.google.com/recaptcha/api/siteverify",
@@ -331,21 +524,79 @@ def verify_captcha(token, remote_ip=None):
             },
             timeout=5,
         )
+
         result = resp.json()
-        return (
-            result.get("success") is True
-            and result.get("score", 0) >= RECAPTCHA_MIN_SCORE
-            and result.get("action") == RECAPTCHA_EXPECTED_ACTION
-        )
+
+        success = result.get("success")
+        score = result.get("score")
+        action = result.get("action")
+        hostname = result.get("hostname")
+        challenge_ts = result.get("challenge_ts")
+        error_codes = result.get("error-codes", [])
+
+        print("📡 [CAPTCHA] GOOGLE RESPONSE")
+        print(f"   HTTP      : {resp.status_code}")
+        print(f"   success   : {success}")
+        print(f"   score     : {score}")
+        print(f"   action    : {action}")
+        print(f"   expected  : {RECAPTCHA_EXPECTED_ACTION}")
+        print(f"   hostname  : {hostname}")
+        print(f"   timestamp : {challenge_ts}")
+        print(f"   errors    : {error_codes}")
+
+        # Phân tích lý do fail
+        reasons = []
+
+        if success is not True:
+            reasons.append("GOOGLE_SUCCESS_FALSE")
+
+        if score is None:
+            reasons.append("SCORE_MISSING")
+        elif score < RECAPTCHA_MIN_SCORE:
+            reasons.append("SCORE_TOO_LOW")
+
+        if action != RECAPTCHA_EXPECTED_ACTION:
+            reasons.append("ACTION_MISMATCH")
+
+        if reasons:
+            print("🔴 [CAPTCHA] FAIL")
+            print(f"   Reason    : {', '.join(reasons)}")
+            print("═" * 64)
+            return False
+
+        print("🟢 [CAPTCHA] PASS")
+        print("   Reason    : ALL_CHECKS_PASSED")
+        print("═" * 64)
+
+        return True
+
+    except requests.exceptions.Timeout:
+        print("⚠️ [reCAPTCHA] TIMEOUT")
+        print("   Google không phản hồi trong 5 giây")
+        print("   Chế độ    : FAIL-OPEN")
+        print("═" * 64)
+        return True
+
+    except requests.exceptions.RequestException as e:
+        print("⚠️ [reCAPTCHA] NETWORK ERROR")
+        print(f"   Error     : {e}")
+        print("   Chế độ    : FAIL-OPEN")
+        print("═" * 64)
+        return True
+
     except Exception as e:
-        print(f"⚠️ [reCAPTCHA] Lỗi xác minh (fail-open, cho qua): {e}")
+        print("⚠️ [reCAPTCHA] UNEXPECTED ERROR")
+        print(f"   Type      : {type(e).__name__}")
+        print(f"   Error     : {e}")
+        print("   Chế độ    : FAIL-OPEN")
+        print("═" * 64)
         return True
 
 
 @app.route("/api/chat", methods=["POST"])
 @limiter.limit("15 per minute")
 def chat():
-    global current_key_index # Khai báo để có thể thay đổi key đang dùng
+    global current_key_index  # Khai báo để có thể thay đổi key đang dùng
     try:
         # --- BẢO MẬT: Chỉ chấp nhận request đến từ Node gateway (biết secret) ---
         if INTERNAL_SECRET and request.headers.get("X-Internal-Secret") != INTERNAL_SECRET:
@@ -380,8 +631,30 @@ def chat():
                 "error": "Xác minh bảo mật thất bại. Vui lòng tải lại trang và thử lại."
             }), 403
 
+        # CAPTCHA hợp lệ: reset bộ đếm lỗi cũ của IP. Nếu không reset,
+        # một vài lỗi captcha rải rác trong 5 phút có thể cộng dồn và
+        # cuối cùng ban nhầm người dùng thật.
+        reset_captcha_failures(client_ip)
+
+        # --- Small-talk không cần RAG/Gemini ---
+        # Tránh trường hợp câu chào/hỏi chức năng không có tài liệu FAISS
+        # rồi bị system prompt buộc trả lời "ngoài phạm vi".
+        is_new_session = session_id not in active_sessions
+        small_talk_reply = detect_small_talk(user_message)
+        if small_talk_reply is not None:
+            result = {"reply": small_talk_reply}
+            if is_new_session:
+                result["title"] = generate_local_title(user_message)
+            if DEBUG_RAG:
+                result["_debug_sources"] = []
+            print("💬 [Small-talk] Bỏ qua RAG/Gemini cho câu hỏi xã giao/meta.")
+            return jsonify(result)
+
+        # Session chưa tồn tại nghĩa là đây là tin nhắn đầu tiên của đoạn chat.
+        # Title sẽ được tạo local và trả cùng response, không có request AI thứ 2.
+
         # --- Giới hạn số session giữ trong RAM ---
-        if session_id not in active_sessions and len(active_sessions) >= MAX_ACTIVE_SESSIONS:
+        if is_new_session and len(active_sessions) >= MAX_ACTIVE_SESSIONS:
             oldest = session_order.pop(0)
             active_sessions.pop(oldest, None)
 
@@ -394,12 +667,12 @@ def chat():
             context, has_relevant, sources = get_relevant_context(user_message)
             if has_relevant:
                 augmented_message = (
-                    f"[Tài liệu tham khảo]:\n{context}\n\n"
+                    f"[Kiến thức nền]:\n{context}\n\n"
                     f"[Câu hỏi của tôi]: {user_message}"
                 )
             else:
                 augmented_message = (
-                    "[Tài liệu tham khảo]: (không tìm thấy đoạn nào đủ liên quan)\n\n"
+                    "[Kiến thức nền]: (không có — hãy dùng kiến thức nền sẵn có của bạn)\n\n"
                     f"[Câu hỏi của tôi]: {user_message}"
                 )
         else:
@@ -410,7 +683,7 @@ def chat():
         # CƠ CHẾ FALLBACK VÒNG LẶP
         # ============================================================
         max_retries = len(VALID_API_KEYS)
-        
+
         for attempt in range(max_retries):
             try:
                 # 1. Lấy hoặc tạo session với client HIỆN TẠI
@@ -426,9 +699,11 @@ def chat():
 
                 # 2. Gửi tin nhắn
                 response = chat_session.send_message(augmented_message)
-                
+
                 # 3. Thành công thì trả về ngay lập tức (thoát vòng lặp)
                 result = {"reply": response.text}
+                if is_new_session:
+                    result["title"] = generate_local_title(user_message)
                 if DEBUG_RAG:
                     result["_debug_sources"] = sources
                 return jsonify(result)
@@ -437,19 +712,21 @@ def chat():
                 error_str = str(e).lower()
                 # Kiểm tra xem lỗi có phải do hết Quota (429 Resource Exhausted) không
                 if "429" in error_str or "quota" in error_str or "exhausted" in error_str:
-                    print(f"⚠️ [Fallback] Key index {current_key_index} bị giới hạn. Đang chuyển sang key tiếp theo...")
-                    
+                    print(
+                        f"⚠️ [Fallback] Key index {current_key_index} bị giới hạn. Đang chuyển sang key tiếp theo...")
+
                     # Chuyển sang key kế tiếp (quay vòng tròn nếu hết mảng)
                     # BẢO MẬT/AN TOÀN: dùng lock để tránh 2 request đồng thời
                     # cùng đổi current_key_index chồng lên nhau (race condition).
                     with key_index_lock:
-                        current_key_index = (current_key_index + 1) % len(VALID_API_KEYS)
-                    
+                        current_key_index = (
+                            current_key_index + 1) % len(VALID_API_KEYS)
+
                     # BẢO TOÀN LỊCH SỬ CHAT: Chuyển lịch sử sang session thuộc Client/Key mới
                     if session_id in active_sessions:
                         try:
                             # Lấy lịch sử cũ bằng hàm của SDK mới
-                            old_history = chat_session.get_history() 
+                            old_history = chat_session.get_history()
                             # Tạo session mới đè lên cái cũ
                             active_sessions[session_id] = clients[current_key_index].chats.create(
                                 model="gemini-flash-lite-latest",
@@ -457,18 +734,19 @@ def chat():
                                 history=old_history
                             )
                         except Exception as hist_err:
-                            print(f"⚠️ [Fallback] Không thể copy lịch sử: {hist_err}")
+                            print(
+                                f"⚠️ [Fallback] Không thể copy lịch sử: {hist_err}")
                             # Nếu copy lịch sử lỗi, xóa session để nó tạo mới hoàn toàn ở vòng lặp sau
-                            active_sessions.pop(session_id, None) 
+                            active_sessions.pop(session_id, None)
                             if session_id in session_order:
                                 session_order.remove(session_id)
-                    
+
                     # Tiếp tục vòng lặp for để thử lại với attempt mới
-                    continue 
+                    continue
                 else:
                     # Nếu là lỗi khác (như mạng rớt, model sập, lỗi code), ném ra để xử lý lỗi 500
                     raise e
-                    
+
         # Nếu thoát khỏi vòng lặp mà vẫn chưa return, nghĩa là tất cả các key đều đã kiệt quệ
         return jsonify({
             "error": "Tất cả máy chủ AI đều đang quá tải (Hết hạn mức). Vui lòng quay lại vào ngày mai!"

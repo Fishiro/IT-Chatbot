@@ -103,3 +103,89 @@
         transform: translateY(0);
     }
 }
+
+/* =========================================================
+   UI POLISH — INPUT / DISCLAIMER / BOTTOM FADE
+   ========================================================= */
+
+/* Placeholder: tăng từ Light lên Medium, rõ như các chatbot hiện đại */
+#user-input {
+    font-weight: 400 !important;
+    color: #1b1b1e !important;
+}
+
+#user-input::placeholder {
+    font-weight: 400 !important;
+    color: #94a3b8 !important;
+    opacity: 1 !important;
+}
+
+.dark #user-input {
+    color: #f8fafc !important;
+}
+
+.dark #user-input::placeholder {
+    color: #94a3b8 !important;
+    opacity: 1 !important;
+}
+
+/*
+ * Không để trạng thái idle/transition làm mờ chữ trong input.
+ * Chỉ trạng thái đang chờ AI mới được phép blur toàn bộ input.
+ */
+#chat-input-container:not(.is-waiting) .input-wrapper {
+    opacity: 1 !important;
+    filter: none !important;
+}
+
+#chat-input-container:not(.is-waiting) #user-input {
+    opacity: 1 !important;
+    filter: none !important;
+}
+
+/* Disclaimer: lớn hơn một chút và đủ tương phản */
+footer > .text-center {
+    font-size: 12px !important;
+    line-height: 1.55 !important;
+    opacity: 1 !important;
+    color: #64748b !important;
+    position: relative;
+    z-index: 30;
+    text-shadow: 0 0 8px rgba(244, 249, 253, 0.85);
+}
+
+.dark footer > .text-center {
+    color: #94a3b8 !important;
+    text-shadow: 0 0 8px rgba(11, 17, 33, 0.9);
+}
+
+/*
+ * Mở rộng vùng fade/blur ở đáy để nội dung phía sau được làm mềm
+ * trước khi chạm vùng input, giảm cảm giác chữ bị chồng/lấn.
+ */
+.bottom-glass-gradient {
+    height: 220px !important;
+    z-index: 15;
+}
+
+.bottom-glass-gradient::before,
+.bottom-glass-gradient::after {
+    -webkit-mask-image: linear-gradient(
+        to top,
+        black 22%,
+        rgba(0, 0, 0, 0.65) 48%,
+        transparent 100%
+    );
+    mask-image: linear-gradient(
+        to top,
+        black 22%,
+        rgba(0, 0, 0, 0.65) 48%,
+        transparent 100%
+    );
+}
+
+/* Tăng nhẹ độ mềm của vùng kính, nhưng không làm mờ text bên trong input */
+#chat-input-container {
+    -webkit-backdrop-filter: blur(44px) !important;
+    backdrop-filter: blur(44px) !important;
+}

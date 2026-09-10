@@ -8,7 +8,7 @@ const inputWrapper = document.getElementById("input-wrapper");
 const API_URL =
     window.location.hostname === "localhost" ||
     window.location.hostname === "127.0.0.1"
-        ? "http://localhost:5000/api/chat"
+        ? "http://localhost:3000/api/chat"
         : "/api/chat";
 
 // --- BẢO MẬT: phải TRÙNG với Site Key đã điền trong index.html ---
@@ -99,14 +99,9 @@ async function sendMessage() {
     userInput.value = "";
     autoResizeTextarea();
 
-    // Biến cờ cục bộ để biết đây có phải là tin đầu tiên không
-    let wasFirstMessage = false;
-
     // Thiết lập UI nếu là tin nhắn đầu
     if (isFirstMessage) {
         isFirstMessage = false;
-        wasFirstMessage = true;
-
         // Hiện ngay đoạn chat lên Sidebar với tên trích xuất tạm từ tin nhắn
         let tempTitle = message.substring(0, 25);
         if (message.length > 25) tempTitle += "...";
@@ -180,9 +175,20 @@ async function sendMessage() {
         // Hiển thị tin nhắn chính
         addMessageToChat("bot", data.reply, true);
 
-        // SAU KHI AI ĐÃ TRẢ LỜI XONG, BÂY GIỜ MỚI GỌI API ĐỂ LẤY TITLE
-        if (wasFirstMessage) {
-            generateAITitle(message, currentSessionID);
+        // Backend tạo title local trong CÙNG request /api/chat.
+        // Không gọi API thứ hai để tránh tốn rate-limit/quota và tạo session rác.
+        if (data?.title && typeof data.title === "string") {
+            const aiTitle = data.title.trim();
+            if (aiTitle && sessions[currentSessionID]) {
+                sessions[currentSessionID].title = aiTitle;
+                currentTitle = aiTitle;
+
+                const histBtn = document.getElementById(
+                    `hist-${currentSessionID}`,
+                );
+                const titleSpan = histBtn?.querySelector(".hist-title");
+                if (titleSpan) titleSpan.textContent = aiTitle;
+            }
         }
     } catch (error) {
         if (error.name === "AbortError") {
@@ -396,47 +402,6 @@ newChatBtn.addEventListener("click", () => {
         "Đã bắt đầu đoạn chat mới. Tôi có thể giúp gì cho bạn?",
     );
 });
-
-// --- TẠO TITLE CHO ĐOẠN CHAT (ĐÃ FIX RACE CONDITION) ---
-async function generateAITitle(firstMessage, targetSessionID) {
-    try {
-        const titleSession = "title-gen-" + targetSessionID;
-        const prompt = `Đọc câu sau và đặt 1 tiêu đề thật ngắn gọn (tối đa 5 chữ) tóm tắt nội dung. Chỉ trả về đúng dòng tiêu đề, không giải thích, không dùng ngoặc kép: "${firstMessage}"`;
-
-        const response = await fetch(API_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ message: prompt, sessionID: titleSession }),
-        });
-
-        const data = await response.json();
-        let aiTitle = data.reply.trim().replace(/^["']|["']$/g, "");
-
-        // Chỉ cập nhật dữ liệu của đúng session được yêu cầu
-        if (sessions[targetSessionID]) {
-            sessions[targetSessionID].title = aiTitle;
-
-            // Nếu người dùng VẪN đang ở đoạn chat này, thì cập nhật biến hiện tại
-            if (currentSessionID === targetSessionID) {
-                currentTitle = aiTitle;
-            }
-        }
-
-        // Cập nhật DOM trên thanh sidebar
-        const histBtn = document.getElementById(`hist-${targetSessionID}`);
-        if (histBtn) {
-            const titleSpan = histBtn.querySelector(".hist-title");
-            if (titleSpan) titleSpan.textContent = aiTitle;
-        }
-    } catch (error) {
-        let fallbackTitle = firstMessage.substring(0, 20) + "...";
-        if (sessions[targetSessionID]) {
-            sessions[targetSessionID].title = fallbackTitle;
-            if (currentSessionID === targetSessionID)
-                currentTitle = fallbackTitle;
-        }
-    }
-}
 
 // --- HÀM RENDER TIN NHẮN ---
 function addMessageToChat(sender, message, isTyping = false) {
